@@ -1,3 +1,5 @@
+//! SPDX-License-Identifier: AGPL-3.0-or-later
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — Zig kernel entry point
 //!

@@ -1,3 +1,5 @@
+//! SPDX-License-Identifier: AGPL-3.0-or-later
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — RISC-V timer + CLINT (complete, no stubs)
 //!  Full tick management with scheduler callback and compare setup.
