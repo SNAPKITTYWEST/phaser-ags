@@ -1,0 +1,56 @@
+{
+  "powerInput": "12V 2A",
+  "protectionCircuit": "Schottky diode + 10µF bulk cap",
+  "primaryRegulator": {
+    "type": "Buck Converter",
+    "model": "TPS54060",
+    "vin": "12V",
+    "vout": "5V",
+    "iout_max": "3A"
+  },
+  "secondaryRegulators": [
+    {
+      "rail": "P3V3",
+      "type": "Buck Converter",
+      "model": "TPS62120",
+      "vin": "5V",
+      "vout": "3.3V",
+      "iout_max": "1.2A",
+      "consumers": ["U3", "GPIO", "UART"]
+    },
+    {
+      "rail": "P1V8",
+      "type": "Buck Converter",
+      "model": "TPS62110",
+      "vin": "3.3V",
+      "vout": "1.8V",
+      "iout_max": "1.0A",
+      "consumers": ["U2", "U3"]
+    },
+    {
+      "rail": "P1V2",
+      "type": "Buck Converter",
+      "model": "TPS62100",
+      "vin": "1.8V",
+      "vout": "1.2V",
+      "iout_max": "2.0A",
+      "consumers": ["U1"]
+    },
+    {
+      "rail": "P1V0",
+      "type": "LDO",
+      "model": "TL1963A-33",
+      "vin": "1.2V",
+      "vout": "1.0V",
+      "iout_max": "500mA",
+      "consumers": ["U1 core"]
+    }
+  ],
+  "sequencing": [
+    {"rail": "P5V0", "delay": "0ms"},
+    {"rail": "P3V3", "delay": "10ms"},
+    {"rail": "P1V8", "delay": "20ms"},
+    {"rail": "P1V2", "delay": "30ms"},
+    {"rail": "P1V0", "delay": "50ms"}
+  ]
+}

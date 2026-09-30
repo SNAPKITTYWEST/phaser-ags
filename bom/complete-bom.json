@@ -1,0 +1,63 @@
+{
+  "projectId": "phaser-ags-reconstruction-001",
+  "bomVersion": "1.0.0",
+  "generatedDate": "2026-09-29",
+  "variants": ["Baseband", "Upconverter", "Debug"],
+  "bomItems": [
+    {
+      "reference": "U1",
+      "quantity": 1,
+      "description": "ARM Cortex-A Processor",
+      "value": "OMAP3530",
+      "manufacturer": "Texas Instruments",
+      "manufacturerPartNumber": "OMAP3530DCAB",
+      "package": "TFBGA-196",
+      "footprint": "TFBGA-196",
+      "voltage": "1.8V",
+      "confidence": "PROBABLE",
+      "variant": ["Baseband", "Upconverter"]
+    },
+    {
+      "reference": "U2",
+      "quantity": 1,
+      "description": "SDRAM 256MB",
+      "value": "MT48H32M16LF-7",
+      "manufacturer": "Micron",
+      "manufacturerPartNumber": "MT48H32M16LF-7 IT",
+      "package": "BGA-96",
+      "voltage": "1.8V",
+      "confidence": "PROBABLE",
+      "variant": ["Baseband", "Upconverter"]
+    },
+    {
+      "reference": "U3",
+      "quantity": 1,
+      "description": "NOR Flash 256Mbit",
+      "value": "JS28F256M29EWH",
+      "manufacturer": "Intel",
+      "manufacturerPartNumber": "JS28F256M29EWH",
+      "package": "BGA-63",
+      "voltage": "3.3V",
+      "confidence": "PROBABLE",
+      "variant": ["Baseband", "Upconverter", "Debug"]
+    },
+    {
+      "reference": "X1",
+      "quantity": 1,
+      "description": "Crystal Oscillator 26MHz",
+      "value": "26MHz",
+      "manufacturer": "Seiko Epson",
+      "manufacturerPartNumber": "FA-128",
+      "package": "SMD",
+      "tolerance": "±30ppm",
+      "confidence": "PROBABLE"
+    }
+  ],
+  "powerRails": [
+    {"name": "P1V0", "voltage": 1.0, "consumers": ["U1"]},
+    {"name": "P1V2", "voltage": 1.2, "consumers": ["U1"]},
+    {"name": "P1V8", "voltage": 1.8, "consumers": ["U2", "U3"]},
+    {"name": "P3V3", "voltage": 3.3, "consumers": ["GPIO", "UART"]},
+    {"name": "P5V0", "voltage": 5.0, "consumers": ["Debug"]}
+  ]
+}

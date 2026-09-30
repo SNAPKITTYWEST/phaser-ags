@@ -1,0 +1,59 @@
+{
+  "memoryMap": [
+    {
+      "name": "RESET_VECTOR",
+      "physicalAddress": "0xFFF00000",
+      "size": "0x100",
+      "device": "ROM",
+      "purpose": "Reset entry point",
+      "busWidth": 32,
+      "confidence": "CONFIRMED"
+    },
+    {
+      "name": "STAGE1_BOOT",
+      "physicalAddress": "0x00000000",
+      "size": "0x20000",
+      "device": "SRAM",
+      "purpose": "First-stage bootloader",
+      "busWidth": 32,
+      "cachePolicy": "WT",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "name": "STAGE2_BOOT",
+      "physicalAddress": "0x30000000",
+      "size": "0x40000",
+      "device": "DRAM",
+      "purpose": "Second-stage bootloader",
+      "busWidth": 32,
+      "cachePolicy": "WB",
+      "confidence": "PROBABLE"
+    },
+    {
+      "name": "KERNEL",
+      "physicalAddress": "0x30040000",
+      "size": "0x400000",
+      "device": "DRAM",
+      "purpose": "Kernel/OS",
+      "busWidth": 32,
+      "cachePolicy": "WB"
+    },
+    {
+      "name": "NOR_FLASH",
+      "physicalAddress": "0x08000000",
+      "size": "0x10000000",
+      "device": "NOR Flash",
+      "purpose": "Persistent storage",
+      "busWidth": 16,
+      "cachePolicy": "WT"
+    },
+    {
+      "name": "NAND_FLASH",
+      "physicalAddress": "0x40000000",
+      "size": "0x20000000",
+      "device": "NAND Flash",
+      "purpose": "User data",
+      "busWidth": 8
+    }
+  ]
+}

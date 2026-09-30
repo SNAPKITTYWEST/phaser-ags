@@ -1,0 +1,45 @@
+{
+  "clockTree": [
+    {
+      "name": "REF_CLK",
+      "source": "X1",
+      "frequency": "26MHz",
+      "tolerance": "±30ppm",
+      "destinations": ["U1 PLL", "U2 clock controller"],
+      "divider": 1
+    },
+    {
+      "name": "CPU_CLK",
+      "source": "U1 PLL",
+      "frequency": "600MHz",
+      "destinations": ["U1 ARM core"],
+      "divider": 1,
+      "pll": {
+        "multiply": 23,
+        "divide": 1,
+        "output_divide": 1
+      }
+    },
+    {
+      "name": "DDR_CLK",
+      "source": "U1 PLL",
+      "frequency": "266MHz",
+      "destinations": ["U2 SDRAM"],
+      "divider": 2
+    },
+    {
+      "name": "UART_CLK",
+      "source": "REF_CLK",
+      "frequency": "26MHz",
+      "destinations": ["UART0", "UART1"],
+      "divider": 1
+    },
+    {
+      "name": "SPI_CLK",
+      "source": "REF_CLK",
+      "frequency": "26MHz",
+      "destinations": ["SPI0", "SPI1"],
+      "divider": 1
+    }
+  ]
+}
