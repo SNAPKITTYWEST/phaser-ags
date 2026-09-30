@@ -1,0 +1,169 @@
+================================================================================
+  SPICE JACOBIAN BLOCK ANALYSIS — CMOS NAND2 Gate
+================================================================================
+
+1. THE SPICE DC PROBLEM
+────────────────────────
+
+  SPICE solves the DC operating point by finding x* such that F(x*) = 0,
+  where F is the KCL (Kirchhoff's Current Law) residual at each node.
+
+  For a circuit with N nodes, x = [v1, v2, ..., vN]^T (node voltages).
+
+  Newton-Raphson iteration:
+    x_{k+1} = x_k - J(x_k)^{-1} · F(x_k)
+
+  where J(x) = ∂F/∂x is the Jacobian (also called the conductance matrix
+  or MNA — Modified Nodal Analysis — matrix).
+
+
+2. NAND2 NODE EQUATIONS
+────────────────────────
+
+  Nodes: Y (output), MID (NMOS series midpoint)
+
+  F_Y(v_Y, v_MID) = I_MP1(v_Y, v_A) + I_MP2(v_Y, v_B)
+                   + I_MN3(v_Y, v_A, v_MID) + C_L · dv_Y/dt = 0
+
+  F_M(v_Y, v_MID) = I_MN4(v_MID, v_B) - I_MN3(v_Y, v_A, v_MID)
+                   + C_M · dv_MID/dt = 0
+
+  For DC: dv/dt = 0, so:
+
+  F_Y = I_MP1 + I_MP2 + I_MN3
+  F_M = I_MN4 - I_MN3
+
+
+3. JACOBIAN MATRIX STRUCTURE
+─────────────────────────────
+
+         ┌                        ┐
+  J   =  │  ∂F_Y/∂v_Y   ∂F_Y/∂v_M  │  =  ┌ J_YY    J_YM  ┐
+         │                        │     │                 │
+         │  ∂F_M/∂v_Y   ∂F_M/∂v_M │     └ J_MY    J_MM  ┘
+         └                        ┘
+
+  Expanding each entry using device conductances:
+
+    J_YY = g_ds(MP1) + g_ds(MP2) + g_ds(MN3)
+         = ∂I_MP1/∂v_Y + ∂I_MP2/∂v_Y + ∂I_MN3/∂v_Y
+
+    J_YM = -g_ds(MN3)
+         = ∂I_MN3/∂v_MID  (current at Y depends on MID through M3)
+
+    J_MY = g_ds(MN3)
+         = -∂I_MN3/∂v_Y  (current at MID depends on Y through M3)
+
+    J_MM = -(g_ds(MN3) + g_ds(MN4))
+         = ∂I_MN4/∂v_MID - ∂I_MN3/∂v_MID
+
+
+4. JACOBIAN STAMPS PER DEVICE
+──────────────────────────────
+
+  Each MOSFET contributes a 4×4 stamp to the full MNA matrix.
+  For the NAND2, we show the reduced 2×2 block for nodes {Y, MID}.
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Device    │  Gate  │  D→Y term    │  D→MID term  │  Notes      │
+  ├────────────────────────────────────────────────────────────────────┤
+  │  MP1 (PMOS)│  A    │  +g_ds(MP1)  │      0       │  S=VDD      │
+  │  MP2 (PMOS)│  B    │  +g_ds(MP2)  │      0       │  S=VDD      │
+  │  MN3 (NMOS)│  A    │  +g_ds(MN3)  │  -g_ds(MN3)  │  D=Y,S=MID │
+  │  MN4 (NMOS)│  B    │      0       │  -g_ds(MN4)  │  D=MID,S=GND│
+  └────────────────────────────────────────────────────────────────────┘
+
+  Sum →  J_YY = g_ds(MP1) + g_ds(MP2) + g_ds(MN3)
+          J_YM = -g_ds(MN3)
+          J_MY = g_ds(MN3)
+          J_MM = -(g_ds(MN3) + g_ds(MN4))
+
+
+5. JACOBIAN EVALUATION AT 4 INPUT CORNERS (VDD=1.8V)
+──────────────────────────────────────────────────────
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ Corner │ A  │ B  │ Y    │ MID  │ J_YY    │ J_YM  │ J_MY │ J_MM    │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │   1    │ 0V │ 0V │ 1.8V │ ~0V  │ ~400µS  │  ~0   │  ~0  │ ~0+gmin │
+  │   2    │ 0V │1.8V│ 1.8V │ ~0V  │ ~200µS  │  ~0   │  ~0  │~100µS   │
+  │   3    │1.8V│ 0V │ 1.8V │ ~0V  │ ~250µS  │ ~50µS │ ~50µS│~50µS    │
+  │   4    │1.8V│1.8V│ ~0V  │~0.1V │ ~50µS   │ ~50µS │ ~50µS│~150µS   │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Corner 1: Both NMOS OFF → MID floating. SPICE adds GMIN=1e-12S to
+    prevent singular Jacobian. J_MM ≈ GMIN.
+  - Corner 2: MN4 ON, MID pulled low. No current through MN3 (A=0 → OFF).
+  - Corner 3: MN3 ON but MN4 OFF → MID floats. g_ds(MN3) creates coupling.
+  - Corner 4: Both NMOS ON, series path conducts. MID ≈ 0.1V (body effect
+    raises Vth of MN3 since source is not at GND).
+
+
+6. NEWTON-RAPHSON CONVERGENCE
+──────────────────────────────
+
+  Starting from initial guess v_Y = 0.9V, v_MID = 0.45V:
+
+  Iteration 1 (A=1.8, B=1.8, target: Y→0):
+
+    J = ┌  50µS   -50µS  ┐     F = ┌  +0.45mA  ┐
+        └  50µS  -150µS  ┘         └  +0.12mA   ┘
+
+    det(J) = (50)(-150) - (-50)(50) = -7500 + 2500 = -5000 µS²
+
+    Δv_Y   = (J_MM·F_Y - J_YM·F_M) / det(J)
+           = ((-150)(0.45) - (-50)(0.12)) / (-5000)
+           = (-67.5 + 6.0) / (-5000)
+           = -61.5 / -5000 = +12.3 mV
+
+    Δv_MID = (J_YY·F_M - J_MY·F_Y) / det(J)
+           = ((50)(0.12) - (50)(0.45)) / (-5000)
+           = (6.0 - 22.5) / (-5000)
+           = -16.5 / -5000 = +3.3 mV
+
+    New: v_Y = 0.9 + 0.0123 = 0.912V  (moving toward ~0V)
+         v_MID = 0.45 + 0.0033 = 0.453V
+
+  The NR method converges quadratically near the solution.
+  SPICE typically converges in 3-8 iterations for CMOS logic gates.
+
+  Convergence criteria:
+    |Δv| < VNTOL (default 1µV)  AND  |F(x)| < RELTOL·x + ABSTOL
+
+
+7. CONDITIONING AND NUMERICAL ISSUES
+─────────────────────────────────────
+
+  The Jacobian determinant varies dramatically across input states:
+
+    Corner 1: det ≈ -4e-16  (near-singular: MID floating)
+    Corner 4: det ≈ -5e-9   (well-conditioned)
+
+  SPICE handles near-singular cases with:
+    a) GMIN: adds 1e-12S to every diagonal entry
+    b) Pivoting: reorders matrix for numerical stability
+    b) Source stepping: ramps supplies from 0→VDD gradually
+    c) Damped NR: limits |Δx| per step to avoid oscillation
+
+  The NAND gate's series NMOS structure creates an off-diagonal
+  coupling (J_YM, J_MY) that is unique compared to simple inverters.
+  This coupling is the "Jacobian block" that makes NAND analysis
+  interesting — the output node and internal MID node are coupled
+  through the MOSFET M3's drain-source conductance.
+
+
+8. SPICE COMMAND REFERENCE FOR JACOBIAN EXTRACTION
+────────────────────────────────────────────────────
+
+  .OP                     — DC operating point (prints Jacobian info)
+  .SAVE @M1[gm] @M1[gds] — Save small-signal parameters
+  .OPTIONS GMIN=1e-12     — Minimum diagonal conductance
+  .OPTIONS ITL1=300       — Max NR iterations for DC
+  .OPTIONS RELTOL=1e-6    — Relative tolerance
+
+  Post-processing to compute Jacobian from saved parameters:
+    J_YY = @MP1[gds] + @MP2[gds] + @MN3[gds]
+    J_YM = -@MN3[gds]
+    J_MY = @MN3[gds]
+    J_MM = -(@MN3[gds] + @MN4[gds])

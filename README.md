@@ -1,179 +1,133 @@
-# Sovereign
+# Phaser AGS Universal
 
-A local-first model playground built from the existing Solution1 C# project. Cloudscape UI on GitHub Pages, an import-free WebAssembly core, a JWT-protected .NET 8 service, a CLI, and a Swift actor host.
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Chisel](https://img.shields.io/badge/Chisel-6.x-FF6F00?logo=scala)](https://www.chisel-lang.org/)
+[![Zig](https://img.shields.io/badge/Zig-0.13-F7A41D?logo=zig)](https://ziglang.org/)
+[![Nim](https://img.shields.io/badge/Nim-2.0-FFE953?logo=nim)](https://nim-lang.org/)
+[![RISC-V](https://img.shields.io/badge/ISA-RV32I-00ACC1?logo=riscv)](https://riscv.org/)
+[![OMAP3530](https://img.shields.io/badge/SoC-OMAP3530-6A1B9A)]()
 
-This is an independent implementation of a bounded set of Bedrock-style workflows, **not a fork of AWS proprietary source or a full replacement for Amazon Bedrock**. No AWS account, API key, or cloud service is used by the active runtime. The original AWS adapter is preserved in `legacy/aws-adapter/` and excluded from the active solution.
+Full-stack embedded board reconstruction — transistor-level CMOS circuits through synthesizable RISC-V core, kernel, and register macros.
 
-The playground is **not** published on GitHub Pages. It requires a signed-in session, so it is served by the service below rather than by a public static site; see [Serving the playground behind a login](#serving-the-playground-behind-a-login).
+> **Repo:** <https://github.com/SNAPKITTYWEST/phaser-ags>
 
-The browser runs the shared WebAssembly core. Swift is supported through the native host below; this page does not compile or execute arbitrary Swift source.
+## Architecture
 
-## Run the playground
-
-Requires Node 24, npm, and LLVM clang with wasm-ld.
-
-```powershell
-npm ci
-npm run build
-npm run dev
+```
+SPICE (BSIM3v3 180nm)          Chisel 6.x (→ Verilog)         Zig (kernel)          Nim (macros)
+─────────────────────          ─────────────────────           ────────────          ─────────────
+NAND2 CMOS netlist      ──→    Nand2 / Nand3 / Nor2     ──→
+Jacobian 2×2 blocks            Inv / And / Or / Xor /
+4-corner analysis              Xnor / Mux2 (from Nand2)
+                               ↓
+NAND3 tridiagonal J    ──→    SR Latch → D Latch →
+SR latch eigenvalues           D FF → Register (NAND)
+                               ↓
+                               Half → Full → RCA-8 →
+                               ALU-8 (NAND-only)
+                               ↓
+                               RegFile / RvAlu (4×RCA-8) /
+                               ImmGen / Control / Core
+                               ↓  (sbt runMain nand.EmitVerilog)
+                               verilog_out/*.v
+                                                              ↓
+                                                       start.S (boot)
+                                                       trap.zig (full ctx save)
+                                                       memory.zig (SV32 VM)
+                                                       process.zig (preemptive RR)
+                                                       syscall.zig (9 syscalls)
+                                                       timer.zig (CLINT)
+                                                       driver.zig (UART/GPIO/PLIC)
+                                                       shell.zig (18 commands)
+                                                                              ↓
+                                                                       defReg / defCsr
+                                                                       omap3530.nim
+                                                                       riscv_csr.nim
+                                                                       riscv_clint.nim
 ```
 
-Open `http://127.0.0.1:5173`. The Pages build is entirely static, with relative asset paths. The browser loads `core.wasm` and instantiates it without imports. Default chat is **extractive document retrieval**, not simulated language-model inference. Documents and tokens remain in tab memory and disappear on reload.
+## Directory
 
-```powershell
-npm run cli -- hash "hello"
-npm run cli -- embed "local knowledge retrieval"
-npm run cli -- flow "Hello world" normalize,guard,hash
+| Path | Contents |
+|------|----------|
+| `circuits/spice/` | NAND2/NAND3/SR-latch SPICE netlists, Jacobian analysis, 4-corner eval |
+| `circuits/analysis/` | MNA formulation, device stamps, numerical Jacobian values |
+| `circuits/cmos/` | Boolean algebra proofs, NAND universality, W/L sizing |
+| `chisel/src/nand/` | Nand2/Nand3/Nor2 primitives + combinational gates from Nand2 |
+| `chisel/src/sequential/` | SR Latch → D Latch → D FF → n-bit Register |
+| `chisel/src/arithmetic/` | Half Adder → Full Adder → RCA-8 → ALU-8 (NAND-only) |
+| `chisel/src/riscv/` | RV32I core: RegFile, ALU, ImmGen, Control, load-use stall |
+| `chisel/src/test/` | ChiselTest for all modules |
+| `zig/kernel/` | Boot asm, trap framework, SV32 VM, preemptive scheduler, syscalls, shell |
+| `nim/regs/` | AST macros for typed MMIO + RISC-V CSR access |
+
+## Build
+
+### Chisel → Verilog
+
+```bash
+cd chisel && sbt "runMain nand.EmitVerilog"
+# Output: verilog_out/{Nand2,Nand3,InvFromNand,...,Rv32iCore}.v
 ```
 
-## C# / .NET service and CLI
+### Chisel tests
 
-Open `Solution1.sln` in Rider. Requires the .NET 8 SDK (not just the runtime). On the originating machine the SDK is `C:\Users\jessi\.dotnet\dotnet.exe`; add that directory to your terminal's PATH if necessary.
-
-```powershell
-dotnet build Solution1.sln -c Release
-dotnet run --project Sovereign.Tests -c Release
-dotnet run --project Sovereign.Host -- hash "hello"
+```bash
+cd chisel && sbt test
 ```
 
-Generate a fresh secret in your own shell. The secret signs short-lived tokens and must never go into a Pages build or Git commit.
+### Zig kernel
 
-```powershell
-$env:SOVEREIGN_JWT_SECRET = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-$env:SOVEREIGN_ALLOWED_ORIGIN = 'http://127.0.0.1:5173'
-# For the published site use https://snapkittywest.github.io (origin has no path).
-dotnet run --project Sovereign.Host -- token
-# Copy the resulting JWT into Connection & JWT in the playground.
-dotnet run --project Sovereign.Host -- serve
+```bash
+cd zig && zig build-exe kernel/main.zig \
+  -target riscv64-freestanding-none \
+  -O ReleaseSmall \
+  -linker-script kernel/kernel.ld
 ```
 
-For real generation, run your own OpenAI-compatible model server and install model weights separately. Before starting the service, set:
+### QEMU
 
-```powershell
-$env:SOVEREIGN_MODEL_ENDPOINT = 'http://127.0.0.1:11434/'
-$env:SOVEREIGN_MODEL = 'your-installed-model-id'
+```bash
+qemu-system-riscv64 -machine virt -nographic -bios none -kernel phaser-ags-kernel
 ```
 
-The model endpoint must be loopback. Redirects are disabled. Generation is unavailable (HTTP 503) until a model is configured; no response is fabricated. The HTTP transport supports standard completions and SSE deltas; the current HTTP playground route returns a complete response. Pages cannot execute .NET or host a model. Browser policy may require permission for requests to loopback; a trusted HTTPS reverse proxy is another deployment option.
+## Hardware target
 
-JWT profile: HS256 only, issuer `sovereign`, audience `sovereign-api`, scope `playground`, nonempty subject, `iat`/`nbf`/`exp`, lifetime at most 15 minutes, constant-time signature comparison. Tokens are issued by the local CLI, or by the service itself after a successful sign-in. Every service route requires authentication. CORS permits one configured origin. Documents and audit queries are isolated by token subject. Server storage is volatile and documents are capped at 100 per subject; the audit ring retains 1,000 requests. This is a local, single-operator service, not a multitenant internet service.
+| Component | Part | Notes |
+|-----------|------|-------|
+| SoC | OMAP3530DCAB | ARM Cortex-A8 + C64x DSP |
+| SDRAM | MT48H32M16LF-7 | 64 MB via SDRC JEDEC init |
+| NOR Flash | JS28F256M29EWH | GPMC CS0 16-bit async |
+| Crystal | 26 MHz | DPLL1→600 MHz, DPLL5→266 MHz |
+| Boot | SRAM 0x20000000 | 256 KB on-chip |
 
-## Serving the playground behind a login
+## NAND gate traceability
 
-Point the service at the built site and it will serve the playground itself, only to a signed-in session:
+Every arithmetic path in the RISC-V ALU traces back to the BSIM3v3 SPICE model:
 
-```powershell
-$env:SOVEREIGN_WEB_ROOT = (Resolve-Path .\dist).Path
-dotnet run --project Sovereign.Host -- serve
-```
+- `RvAlu` uses 4× `RippleCarryAdder(8)` for 32-bit ADD/SUB
+- Each `RippleCarryAdder(8)` chains 8× `FullAdderFromNand`
+- Each `FullAdderFromNand` = 2× `HalfAdderFromNand` + `Or2FromNand`
+- Each `HalfAdderFromNand` = `Xor2FromNand` (4 Nand2) + `And2FromNand` (2 Nand2)
+- **~288 Nand2 gates in the 32-bit add path**, each validated by `nand2_cmos.sp`
 
-With `SOVEREIGN_WEB_ROOT` set, an unauthenticated request for `/` is redirected to `/login` instead of receiving the application, `/api/*` still answers 401, and `/login` stays reachable so a session can be established. A successful sign-in sets an `HttpOnly`, `SameSite=Strict` session cookie holding the same 15-minute JWT; the browser sends it on navigation, which is why the gate works without JavaScript.
+## Kernel capabilities
 
-**GitHub Pages does not publish this application.** The Pages workflow deploys only a static notice, because Pages serves static files with no ability to reject a request: an unauthenticated copy on the public internet could be bypassed in one line of JavaScript, so a client-side gate there would be theatre rather than a control. Authentication is enforced by the service, which can actually refuse to respond.
+| Subsystem | Implementation |
+|-----------|---------------|
+| Boot | `start.S`: M-mode entry, BSS zero, stack/GP setup, trap vector install |
+| Traps | Full 31-GPR + 4-CSR save/restore, per-code dispatch, context switch via `mv sp,a0` |
+| VM | SV32 two-level page tables, map/unmap/translate, `sfence.vma`, `createAddressSpace`/`destroyAddressSpace` |
+| Memory | Bitmap page allocator (4 KB), `allocPage`/`allocRange`/`freePage`/`freeRange` |
+| Scheduler | Preemptive round-robin, 10-tick quantum, `ksp`-based context switch, page table switch |
+| Syscalls | read/write/open/close/yield/getpid/exit/mmap/munmap — 9 fully implemented |
+| Devices | `/dev/uart0`, `/dev/null`, `/dev/zero` via per-process fd table + `DevOps` dispatch |
+| Timer | CLINT mtime/mtimecmp, safe 64-bit read, tick advance, scheduler callback |
+| PLIC | Priority/threshold/enable/claim/complete, external IRQ dispatch table |
+| Shell | 18 commands: md, mw, mwb, go, reset, regs, proc, spawn, kill, reap, vm, vmmap, vmtrans, tick, pages, led, echo, help |
 
-To deploy this yourself, run the service on a host the browser can reach, put a trusted HTTPS reverse proxy in front of it, and point a domain at it. A tunnel works for a private instance. Keep the service on loopback when you do not need it reachable, and set `SOVEREIGN_ALLOWED_ORIGIN` to the exact origin that serves the page.
+## License
 
-`deploy/` contains a Caddyfile, an nginx site, and a hardened systemd unit, with the commands and the verification steps in [deploy/README.md](deploy/README.md). Check the gate from outside the server rather than assuming it holds: an unauthenticated `/` must answer 302 to `/login`, and `Set-Cookie` must include `secure`, `httponly` and `samesite=strict`.
+[GNU Affero General Public License v3.0 or later](LICENSE) — SPDX: `AGPL-3.0-or-later`
 
-## Single sign-on (SAML 2.0)
-
-The playground has a sign-in page at `/login`. It performs SP-initiated SAML against the identity provider you configure, and exchanges the verified assertion for the same short-lived HS256 token the CLI issues, so nothing downstream changes.
-
-SAML is **off until configured**. With any of the variables below missing, `/saml/login` and `/saml/metadata` return 503 and `/saml/status` names the missing setting. There are no defaults and no fallback identity provider.
-
-| Variable | Meaning |
-|---|---|
-| `SOVEREIGN_SAML_SP_ENTITYID` | Entity ID this service provider publishes; register it with your IdP |
-| `SOVEREIGN_SAML_ACS` | Public **https** URL the IdP posts assertions back to |
-| `SOVEREIGN_SAML_IDP_ENTITYID` | IdP entity ID, matched against the Response `Issuer` |
-| `SOVEREIGN_SAML_IDP_SSO_POST` | IdP HTTP-POST single-sign-on endpoint |
-| `SOVEREIGN_SAML_IDP_CERT` | Path to a PEM signing certificate, or several separated by `;` |
-| `SOVEREIGN_SAML_SUBJECT_ATTRIBUTE` | Attribute to use as the token subject; defaults to the NameID |
-| `SOVEREIGN_SAML_RETURN_ORIGIN` | Origin the browser is returned to after login |
-| `SOVEREIGN_BIND` | Listener address; loopback by default |
-
-```powershell
-$env:SOVEREIGN_SAML_SP_ENTITYID  = 'https://sovereign.example/saml'
-$env:SOVEREIGN_SAML_ACS          = 'https://sovereign.example/saml/acs'
-$env:SOVEREIGN_SAML_IDP_ENTITYID = 'https://idp.example/entity'
-$env:SOVEREIGN_SAML_IDP_SSO_POST = 'https://idp.example/sso'
-$env:SOVEREIGN_SAML_IDP_CERT     = 'C:\certs\idp-signing.pem'
-# The IdP must be able to reach the ACS, so the host needs a routable listener.
-$env:SOVEREIGN_BIND               = 'http://0.0.0.0:5080'
-dotnet run --project Sovereign.Host -- serve
-```
-
-Register the service provider with your IdP using `GET /saml/metadata` (ACS binding is HTTP-POST). Put a trusted HTTPS reverse proxy in front of the host; the ACS must be reachable over the public internet for the IdP to post to it.
-
-What the validator refuses: unsigned responses, responses not signed by a configured certificate, a Reference that does not cover the Response element, digests that do not match the signed content, SHA-1 digests, an Issuer other than the configured IdP, an audience other than this service provider, expired or not-yet-valid assertions, a missing `InResponseTo`, a replayed `RelayState` (one-time nonce, 10-minute window), and any Assertion that is not a direct child of the signed Response. XML parsing disables DTDs and external entities.
-
-Boundary: this is a SAML 2.0 SP for a single-operator service. There is no session store, no single logout, no IdP-initiated flow, and no user provisioning. Token lifetime stays capped at 15 minutes, so an active user must sign in again when it expires. The Pages site holds no secret; only the host verifies signatures.
-
-| Method | Route | Body / purpose |
-|---|---|---|
-| GET | `/api/status` | authenticated runtime status |
-| GET | `/api/models` | configured local model ID |
-| POST | `/api/invoke` | `{ "prompt": "..." }` |
-| POST | `/api/tools` | `{ "operation": "embed", "text": "..." }` |
-| POST | `/api/documents` | `{ "title": "...", "text": "..." }` |
-| POST | `/api/retrieve` | `{ "prompt": "..." }` |
-| POST | `/api/batch` | `{ "operation": "hash", "texts": ["..."] }` |
-| POST | `/api/flows` | `{ "text": "...", "steps": ["normalize", "guard", "hash"] }` |
-| GET | `/api/audit` | current subject's request outcomes |
-| POST | `/auth/login` | `{ "username": "...", "password": "..." }` returns a token and sets the session cookie |
-| GET | `/auth/status` | which sign-in methods are configured |
-| POST | `/auth/logout` | clears the session cookie |
-| GET | `/saml/metadata` | service-provider metadata for IdP registration |
-| GET | `/saml/status` | whether single sign-on is configured, and what is missing |
-| GET | `/saml/login` | begins SP-initiated login, redirects to the IdP |
-| POST | `/saml/acs` | assertion consumer; returns the token on the URL fragment |
-
-## Swift host
-
-See [the formal specification and Swift example](docs/ARCHITECTURE.md). The Swift package uses no third-party Swift packages. It embeds the **Wasmtime C runtime**; a native Wasm engine is an explicit runtime dependency, as requested by the host-embedding specification. Browser execution instead uses the browser's built-in engine. The freestanding core itself has no dependencies or imports.
-
-On macOS with Xcode tools, or Linux with Swift and LLVM:
-
-```sh
-npm run build:core
-bash scripts/test-swift.sh
-```
-
-The script downloads the pinned official Wasmtime v49.0.1 C API distribution into ignored `vendor/`, runs XCTest, and executes the Swift example. Native borrowed output is zero-copy inside a synchronous actor-isolated closure; requesting owned `Data` explicitly copies it. Input `Data` is copied once into linear memory. Pointers must never escape the closure or cross an `await`.
-
-## Verification and publication
-
-```powershell
-dotnet build Solution1.sln -c Release
-dotnet run --project Sovereign.Tests -c Release --no-build
-npm test
-npm run build
-npx playwright install chromium
-npm run test:ui
-npm run bench
-```
-
-`npm test` includes Wasm properties plus an actual HTTP test against the built .NET host. The HTTP test issues temporary credentials in memory, exercises authentication and retrieval isolation, and compares all four .NET primitives against Wasm. Model transport tests use a controlled HTTP handler; they do not establish the quality or availability of any installed language model.
-
-The Pages workflow installs dependencies, builds the static frontend and Wasm core, and publishes dist. Runtime/browser tests and native Swift tests run in separate workflows; neither blocks Pages deployment. Screenshots are uploaded as workflow artifacts. The repository does not contain credentials or model weights.
-
-## Capability boundary
-
-| Bedrock-style area | Implemented here | Boundary |
-|---|---|---|
-| Model playground | local retrieval + explicit model connector | no bundled trained model |
-| Model invocation / streaming | .NET HTTP and SSE transport | local OpenAI-compatible server required |
-| Embeddings | deterministic 64-bin hashed word histogram | lexical, not learned semantic embeddings |
-| Knowledge bases / retrieval | local document indexing and cosine ranking | no managed storage or web crawler |
-| Guardrails | explicit secret-label bitmask | not a safety classifier or PII guarantee |
-| Flows / tools | bounded sequential primitive flows with deny short-circuit | no autonomous planning or arbitrary shell execution |
-| Batch | up to 100 deterministic inputs | synchronous, no distributed scheduler |
-| Audit | session events and deterministic FNV replay seals | not WORM, cryptographic, or tamper-proof |
-| JWT access control | local issuer and strict service verifier | no managed IAM, SSO, billing, or cloud control plane |
-| Session enforcement | service serves the app only to a signed-in session | no refresh or revocation; the 15-minute token simply expires |
-| SAML 2.0 single sign-on | SP-initiated login, signed-assertion verification, token exchange | no session store, SLO, IdP-initiated flow, or provisioning; requires a public ACS |
-| Fine-tuning, image/video/audio models, distillation, managed evaluation, provisioned throughput | not implemented | require separate models, training code, hardware, and service infrastructure |
-
-Cloudscape + React are the requested UI dependencies. Vite, Playwright, and LLVM are build/test tools. .NET uses only its standard/shared frameworks; AWS SDK and NuGet runtime dependencies are absent from the active projects.
-
-Independent project by SnapKitty. AWS, Amazon Bedrock, and Cloudscape names identify compatibility/design context, not affiliation. No project license has been invented; establish the desired license before external redistribution beyond this repository.
+Copyright 2025 Ahmad Ali Parr / SnapKitty

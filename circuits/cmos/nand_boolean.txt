@@ -1,0 +1,105 @@
+================================================================================
+  CMOS NAND GATE — Boolean Algebra Derivation & Circuit Topology
+================================================================================
+
+1. BOOLEAN ALGEBRA DEFINITION
+──────────────────────────────
+
+  NAND(a, b) = ¬(a ∧ b) = (a · b)'
+
+  Truth Table:
+  ┌─────┬─────┬───────┐
+  │  A  │  B  │  Y    │
+  ├─────┼─────┼───────┤
+  │  0  │  0  │  1    │
+  │  0  │  1  │  1    │
+  │  1  │  0  │  1    │
+  │  1  │  1  │  0    │
+  └─────┴─────┴───────┘
+
+  Universal gate: all other gates derive from NAND.
+
+2. BOOLEAN ALGEBRA PROOF — NAND is complete
+─────────────────────────────────────────────
+
+  NOT from NAND:
+    ¬a = NAND(a, a)
+    Proof: NAND(a,a) = (a·a)' = a'      [Idempotent: a·a = a]
+
+  AND from NAND:
+    a ∧ b = NAND(NAND(a,b), NAND(a,b))
+    Proof: Let n = NAND(a,b) = (a·b)'
+           NAND(n,n) = (n·n)' = n' = (a·b)'' = a·b   [Double complement]
+
+  OR from NAND:
+    a ∨ b = NAND(NAND(a,a), NAND(b,b))
+    Proof: NAND(a,a) = a'
+           NAND(b,b) = b'
+           NAND(a',b') = (a'·b')'
+           By De Morgan: (a'·b')' = a'' + b'' = a + b
+
+  XOR from NAND:
+    a ⊕ b = NAND(NAND(a, NAND(a,b)), NAND(b, NAND(a,b)))
+    Proof: Let n = NAND(a,b) = (a·b)'
+           NAND(a,n) = (a·(a·b)')'
+           NAND(b,n) = (b·(a·b)')'
+           Final NAND = XOR
+
+3. CMOS NAND GATE TOPOLOGY
+───────────────────────────
+
+  CMOS = complementary pull-up network (PMOS) + pull-down network (NMOS)
+
+  NAND uses:
+    Pull-up:   PMOS in parallel  (either input LOW → output HIGH)
+    Pull-down:  NMOS in series   (both inputs HIGH → output LOW)
+
+         VDD
+          │
+    ┌─────┴─────┐
+    │           │
+   P1          P2        ← PMOS parallel (pull-up)
+   A┤          B┤
+    │           │
+    └─────┬─────┘
+          │
+          Y ─────── Output
+          │
+    ┌─────┴─────┐
+    │           │
+   N1          N2        ← NMOS series (pull-down)
+   A┤          B┤
+    │           │
+    └─────┬─────┘
+          │
+         GND
+
+  Switching behavior:
+    A=0, B=0: P1 ON, P2 ON,  N1 OFF, N2 OFF  →  Y = VDD  (1)
+    A=0, B=1: P1 ON, P2 OFF, N1 OFF, N2 ON   →  Y = VDD  (1)
+    A=1, B=0: P1 OFF,P2 ON,  N1 ON,  N2 OFF  →  Y = VDD  (1)
+    A=1, B=1: P1 OFF,P2 OFF, N1 ON,  N2 ON   →  Y = GND  (0)
+
+4. TRANSISTOR SIZING (W/L ratios)
+───────────────────────────────────
+
+  For balanced rise/fall times:
+    NMOS in series: each needs 2× width to compensate for series resistance
+    PMOS in parallel: each can use minimum size (parallel conducts better)
+
+    Minimum:  Wn = 2·Wmin,  Wp = Wmin
+    Balanced: Wn = 2·Wmin,  Wp = 2·Wmin  (PMOS ≈2× slower per µm)
+
+    Typical 180nm: Wmin = 200nm
+      NMOS: W/L = 400nm / 180nm
+      PMOS: W/L = 400nm / 180nm
+
+5. PROPAGATION DELAY
+────────────────────
+
+  t_pLH = C_L · V_DD / (2 · I_DP)        (pull-up: PMOS charging C_L)
+  t_pHL = C_L · V_DD / (2 · I_DN_series)  (pull-down: 2 NMOS in series)
+
+  I_DN_series ≈ I_DN / 2  (series halves current)
+  → t_pHL ≈ 2 · t_pHL_single
+  → NMOS sizing at 2× compensates this.
