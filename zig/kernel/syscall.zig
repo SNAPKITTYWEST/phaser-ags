@@ -1,5 +1,5 @@
 //! SPDX-License-Identifier: AGPL-3.0-or-later
-//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty — https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — System call interface (complete, no stubs)
 //!
@@ -13,7 +13,7 @@ const trap = @import("trap.zig");
 const process = @import("process.zig");
 const memory = @import("memory.zig");
 
-pub const Syscall = enum(u64) {
+pub const Syscall = enum(usize) {
     read   = 0,
     write  = 1,
     open   = 2,
@@ -26,12 +26,12 @@ pub const Syscall = enum(u64) {
     _,
 };
 
-const EBADF:  u64 = 9;
-const ENOMEM: u64 = 12;
-const ENOENT: u64 = 2;
-const EINVAL: u64 = 22;
+const EBADF:  usize = 9;
+const ENOMEM: usize = 12;
+const ENOENT: usize = 2;
+const EINVAL: usize = 22;
 
-pub fn dispatch(num: u64, frame: *trap.TrapFrame) u64 {
+pub fn dispatch(num: usize, frame: *trap.TrapFrame) usize {
     const sc: Syscall = @enumFromInt(num);
     switch (sc) {
         .read   => return sysRead(frame),
@@ -45,7 +45,7 @@ pub fn dispatch(num: u64, frame: *trap.TrapFrame) u64 {
         .munmap => return sysMunmap(frame),
         else    => {
             driver.Uart.puts("SYS: unknown ");
-            driver.Uart.putHex(num);
+            driver.Uart.putHex(@truncate(num));
             driver.Uart.putc('\n');
             return EINVAL;
         },
@@ -54,22 +54,22 @@ pub fn dispatch(num: u64, frame: *trap.TrapFrame) u64 {
 
 // ─── read(fd, buf, len) ──────────────────────────────────────────
 
-fn sysRead(frame: *trap.TrapFrame) u64 {
+fn sysRead(frame: *trap.TrapFrame) usize {
     const fd_num: u32 = @intCast(frame.a0);
-    const buf_addr: u64 = frame.a1;
-    const len: u64 = frame.a2;
+    const buf_addr: usize = frame.a1;
+    const len: usize = frame.a2;
     if (len == 0) return 0;
     if (fd_num >= 16) return EBADF;
 
     const proc = process.getCurrent() orelse return EBADF;
     const fd = process.getFd(proc, fd_num) orelse return EBADF;
-    const buf: [*]u8 = @ptrFromInt(@intCast(buf_addr));
+    const buf: [*]u8 = @ptrFromInt(buf_addr);
 
-    var total: u64 = 0;
+    var total: usize = 0;
     switch (fd.kind) {
         .device => {
             if (fd.dev) |dev| {
-                total = dev.read(buf[0..@intCast(len)]);
+                total = dev.read(buf[0..len]);
             }
         },
         .pipe => total = 0,
@@ -82,22 +82,22 @@ fn sysRead(frame: *trap.TrapFrame) u64 {
 
 // ─── write(fd, buf, len) ─────────────────────────────────────────
 
-fn sysWrite(frame: *trap.TrapFrame) u64 {
+fn sysWrite(frame: *trap.TrapFrame) usize {
     const fd_num: u32 = @intCast(frame.a0);
-    const buf_addr: u64 = frame.a1;
-    const len: u64 = frame.a2;
+    const buf_addr: usize = frame.a1;
+    const len: usize = frame.a2;
     if (len == 0) return 0;
     if (fd_num >= 16) return EBADF;
 
     const proc = process.getCurrent() orelse return EBADF;
     const fd = process.getFd(proc, fd_num) orelse return EBADF;
-    const buf: [*]const u8 = @ptrFromInt(@intCast(buf_addr));
+    const buf: [*]const u8 = @ptrFromInt(buf_addr);
 
-    var total: u64 = 0;
+    var total: usize = 0;
     switch (fd.kind) {
         .device => {
             if (fd.dev) |dev| {
-                total = dev.write(buf[0..@intCast(len)]);
+                total = dev.write(buf[0..len]);
             }
         },
         .pipe, .file => total = len,
@@ -109,12 +109,12 @@ fn sysWrite(frame: *trap.TrapFrame) u64 {
 
 // ─── open(path, flags) ───────────────────────────────────────────
 
-fn sysOpen(frame: *trap.TrapFrame) u64 {
-    const path_addr: u64 = frame.a0;
+fn sysOpen(frame: *trap.TrapFrame) usize {
+    const path_addr: usize = frame.a0;
     const flags: u32 = @intCast(frame.a1);
 
     const proc = process.getCurrent() orelse return ENOENT;
-    const path_ptr: [*]const u8 = @ptrFromInt(@intCast(path_addr));
+    const path_ptr: [*]const u8 = @ptrFromInt(path_addr);
 
     var path_len: usize = 0;
     while (path_len < 256 and path_ptr[path_len] != 0) : (path_len += 1) {}
@@ -168,7 +168,7 @@ fn devNop() void {}
 
 // ─── close(fd) ───────────────────────────────────────────────────
 
-fn sysClose(frame: *trap.TrapFrame) u64 {
+fn sysClose(frame: *trap.TrapFrame) usize {
     const fd_num: u32 = @intCast(frame.a0);
     const proc = process.getCurrent() orelse return EBADF;
     if (fd_num >= 16) return EBADF;
@@ -181,7 +181,7 @@ fn sysClose(frame: *trap.TrapFrame) u64 {
 
 // ─── yield() ─────────────────────────────────────────────────────
 
-fn sysYield(frame: *trap.TrapFrame) u64 {
+fn sysYield(frame: *trap.TrapFrame) usize {
     _ = frame;
     process.yieldExecution();
     return 0;
@@ -189,7 +189,7 @@ fn sysYield(frame: *trap.TrapFrame) u64 {
 
 // ─── getpid() ────────────────────────────────────────────────────
 
-fn sysGetpid(frame: *trap.TrapFrame) u64 {
+fn sysGetpid(frame: *trap.TrapFrame) usize {
     _ = frame;
     if (process.getCurrent()) |p| return p.pid;
     return 0;
@@ -197,15 +197,16 @@ fn sysGetpid(frame: *trap.TrapFrame) u64 {
 
 // ─── exit(code) ──────────────────────────────────────────────────
 
-fn sysExit(frame: *trap.TrapFrame) u64 {
-    const code: i32 = @bitCast(@intCast(frame.a0));
+fn sysExit(frame: *trap.TrapFrame) usize {
+    // a0 is XLEN-wide; the exit code is its low 32 bits, reinterpreted as signed.
+    const code: i32 = @bitCast(@as(u32, @truncate(frame.a0)));
     process.exit(code);
     return 0;
 }
 
 // ─── mmap(addr, len, prot) → virtual address ────────────────────
 
-fn sysMmap(frame: *trap.TrapFrame) u64 {
+fn sysMmap(frame: *trap.TrapFrame) usize {
     const len: u32 = @intCast(frame.a1);
     const prot: u32 = @intCast(frame.a2);
     if (len == 0) return EINVAL;
@@ -234,7 +235,7 @@ fn sysMmap(frame: *trap.TrapFrame) u64 {
 
 // ─── munmap(addr, len) ───────────────────────────────────────────
 
-fn sysMunmap(frame: *trap.TrapFrame) u64 {
+fn sysMunmap(frame: *trap.TrapFrame) usize {
     const addr: u32 = @intCast(frame.a0);
     const len: u32 = @intCast(frame.a1);
     if (len == 0) return EINVAL;

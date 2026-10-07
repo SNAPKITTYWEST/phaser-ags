@@ -1,5 +1,5 @@
 //! SPDX-License-Identifier: AGPL-3.0-or-later
-//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty — https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — RISC-V timer + CLINT (complete, no stubs)
 //!  Full tick management with scheduler callback and compare setup.
@@ -18,9 +18,14 @@ inline fn clintRead64(offset: u32) u64 {
     return @as(u64, hi) << 32 | @as(u64, lo);
 }
 
+/// 64-bit CLINT register write using two 32-bit stores (RV32 has no sd).
+/// Sequence from the RISC-V privileged spec (mtimecmp on RV32): park the
+/// low word at max first so the transient {new_hi, old_lo} value can
+/// never be <= mtime and raise a spurious timer interrupt.
 inline fn clintWrite64(offset: u32, val: u64) void {
-    driver.regWrite(u32, CLINT_BASE + offset + 4, @intCast(val >> 32));
-    driver.regWrite(u32, CLINT_BASE + offset, @intCast(val & 0xFFFFFFFF));
+    driver.regWrite(u32, CLINT_BASE + offset, 0xFFFF_FFFF);
+    driver.regWrite(u32, CLINT_BASE + offset + 4, @truncate(val >> 32));
+    driver.regWrite(u32, CLINT_BASE + offset, @truncate(val));
 }
 
 pub fn getTime() u64 {

@@ -1,556 +1,317 @@
-# Phaser AGS: Hardware Operating System for RISC-V & ARM
+# Phaser AGS
 
-**Real embedded OS. Real hardware. Real implementation.**
+Embedded platform definition, firmware and kernel for a TI OMAP3530-based board with an FPGA-hosted RV32I processor core.
 
-Phaser AGS is a production-grade operating system targeting RISC-V RV32IM and ARM Cortex-A8 platforms. This repository contains the complete, bootable OS with bootloader, kernel, device drivers, and shell—written in Zig, Assembly, and Chisel.
-
-**Target Hardware:** OMAP3530 (BeagleBoard), RISC-V SoC, Xilinx FPGA  
-**Status:** Complete implementation, zero placeholders, 4,200+ lines production code  
-**License:** Open source (See LICENSE file)
-
----
-
-## Executive Summary
-
-Phaser AGS implements a real, production-ready embedded operating system with:
-
-- **Preemptive scheduler:** Round-robin with 10 ms ticks and context switching
-- **Virtual memory:** SV32 two-level paging, buddy allocator, demand paging support
-- **9 syscalls:** read, write, open, close, mmap, munmap, fork, exec, exit
-- **Device drivers:** UART, GPIO, PLIC (interrupt controller), CLINT timer
-- **Exception handling:** 16 exception types with trap dispatch and recovery
-- **Process management:** Full lifecycle (create, run, block, exit, reap)
-- **Shell:** 18+ debugging commands for system inspection
-
-This is NOT an educational toy. Every component is production-ready with zero stubs or placeholder implementations.
+| Item | Value |
+|---|---|
+| Application processor | TI OMAP3530 (ARM Cortex-A8) |
+| Soft core | RV32I, Chisel HDL (`chisel/src/riscv/Rv32iCore.scala`) |
+| SDRAM | Micron MT48H32M16LF-7 (512 Mbit, x16) |
+| NOR flash | JS28F256M29EWH (256 Mbit) |
+| Reference clock | 26 MHz crystal oscillator (Seiko Epson) |
+| Input power | 12 V, 2 A |
+| License | GNU AGPL v3.0 or later |
 
 ---
 
-## Hardware Platform
+## 1. Repository Layout
 
-### OMAP3530 Memory Map
+| Path | Contents |
+|---|---|
+| `bom/` | Bill of materials (`complete-bom.json`), variants: Baseband, Upconverter, Debug |
+| `hardware-description/` | Device tree source (`device-tree.dts`) |
+| `memory/` | Board physical memory map (`memory-map.json`) |
+| `clock/` | Clock tree (`clock-tree.json`) |
+| `power/` | Power tree and sequencing (`power-tree.json`) |
+| `circuits/` | SPICE netlists and analysis for CMOS NAND primitives and derived gates |
+| `chisel/` | RV32I core and NAND-derived logic library (Chisel/Scala, sbt) |
+| `firmware/` | ARM Cortex-A8 boot firmware: stage 1/2, HAL, flash and SDRAM drivers, linker scripts |
+| `boot/` | Stage-1 loaders for ARM, MIPS and PowerPC |
+| `zig/` | RV32I kernel (Zig and RISC-V assembly) |
+| `nim/` | Register definition macros (OMAP3530, RISC-V CSR, CLINT) |
+| `tcl/` | FPGA build scripts |
+| `build/` | Firmware Makefile and build script |
+| `validation/` | Validation report |
 
-| Physical Address | Size | Purpose |
+---
+
+## 2. Power
+
+### 2.1 Regulators
+
+| Rail | Topology | Device | V<sub>in</sub> | V<sub>out</sub> | I<sub>max</sub> | Loads |
+|---|---|---|---|---|---|---|
+| P5V0 | Buck | TPS54060 | 12 V | 5.0 V | 3.0 A | Downstream regulators, debug |
+| P3V3 | Buck | TPS62120 | 5.0 V | 3.3 V | 1.2 A | U3, GPIO, UART |
+| P1V8 | Buck | TPS62110 | 3.3 V | 1.8 V | 1.0 A | U2, U3 |
+| P1V2 | Buck | TPS62100 | 1.8 V | 1.2 V | 2.0 A | U1 |
+| P1V0 | LDO | TL1963A-33 | 1.2 V | 1.0 V | 500 mA | U1 core |
+
+Input protection: Schottky diode with 10 µF bulk capacitance.
+
+### 2.2 Power-Up Sequence
+
+| Rail | Delay from P5V0 |
+|---|---|
+| P5V0 | 0 ms |
+| P3V3 | 10 ms |
+| P1V8 | 20 ms |
+| P1V2 | 30 ms |
+| P1V0 | 50 ms |
+
+---
+
+## 3. Clocks
+
+| Clock | Source | Frequency | Destination |
+|---|---|---|---|
+| REF_CLK | X1 | 26 MHz, ±30 ppm | U1 PLL, U2 clock controller |
+| CPU_CLK | U1 PLL (×23) | 598 MHz (nominal 600 MHz) | U1 ARM core |
+| DDR_CLK | U1 PLL | 266 MHz | U2 SDRAM |
+| UART_CLK | REF_CLK | 26 MHz | UART0, UART1 |
+| SPI_CLK | REF_CLK | 26 MHz | SPI0, SPI1 |
+
+The kernel UART driver computes its baud divisor from a 48 MHz functional clock (`zig/kernel/driver.zig`). See section 9.
+
+---
+
+## 4. Memory Maps
+
+### 4.1 Board (ARM Cortex-A8 view)
+
+Source: `memory/memory-map.json`, `firmware/linker/memory.ld`.
+
+| Region | Base | Size | Device | Bus width | Cache policy |
+|---|---|---|---|---|---|
+| Reset vector | 0xFFF00000 | 256 B | ROM | 32 | — |
+| Stage-1 boot | 0x00000000 | 128 KB | SRAM | 32 | WT |
+| Stage-2 boot | 0x30000000 | 256 KB | DRAM | 32 | WB |
+| Kernel | 0x30040000 | 4 MB | DRAM | 32 | WB |
+| NOR flash | 0x08000000 | 256 MB window | NOR | 16 | WT |
+| NAND flash | 0x40000000 | 512 MB window | NAND | 8 | — |
+
+### 4.2 RV32I Kernel
+
+Source: `zig/kernel/kernel.ld`, `zig/kernel/driver.zig`.
+
+| Region | Base | Size | Use |
+|---|---|---|---|
+| CLINT | 0x02000000 | 64 KB | `mtime`, `mtimecmp`, `msip` |
+| PLIC | 0x0C000000 | 64 MB | External interrupt controller |
+| SRAM | 0x20000000 | 256 KB | Kernel image, stacks, heap; reset PC |
+| DRAM | 0x30000000 | 64 MB | Page allocator |
+| OMAP3530 L4 peripherals | 0x48000000 | 32 MB | UART, GPIO, INTC, timers |
+| SDRC | 0x6D000000 | — | SDRAM controller |
+| GPMC | 0x6E000000 | — | NOR/NAND controller |
+
+SRAM layout, low to high addresses:
+
+| Section | Size | Notes |
 |---|---|---|
-| 0x00000000-0x00020000 | 128 KB | Internal SRAM (bootloader) |
-| 0x40200800-0x40280000 | 512 KB | SRAM (Stage 1 code) |
-| 0x80000000-0xFF800000 | 2 GB | SDRAM (kernel + processes) |
-| 0x48000000-0x48100000 | 1 MB | UART, Timer, Interrupt Controller |
-| 0x48050000-0x49056000 | 6 MB | GPIO banks (0-5) |
-| 0x6D000000 | 36 B | SDRAM Controller (SDRC) |
-| 0x6E000000 | 32 B | GPMC (NOR/NAND controller) |
-| 0x08000000-0x18000000 | 256 MB | NOR Flash |
-| 0x10000000-0x30000000 | 512 MB | NAND Flash |
+| `.text.boot` | — | `_start`, `trap_vector`; pinned at 0x20000000 |
+| `.text`, `.rodata`, `.data`, `.bss` | — | Kernel image |
+| `.stack` | 32 KB | Boot and shell stack |
+| `.trapstack` | 8 KB | Trap stack for traps taken outside a process |
+| Heap | Remainder | Page-aligned, to 0x20040000 |
 
-### Clock Tree
-
-```
-26 MHz Reference (X1)
-  └─ DPLL1 (600 MHz) → CPU clock + L3/L4 buses
-  └─ DPLL3 (332 MHz) → DDR memory clock
-  └─ DPLL4 (864 MHz) → USB, camera, UART (48 MHz)
-```
-
-### Interrupt Controller (PLIC)
-
-- **96 interrupt sources** (GPIO banks, UART, timers, SPI, I2C, etc.)
-- **7 priority levels** (1-7, 0 = disabled)
-- **Hart 0 claim/complete mechanism** for safe interrupt delivery
-
-### GPIO Banks
-
-- **6 banks** (GPIO0-GPIO5)
-- **96 total pins** (16 per bank)
-- **Individual interrupt enable/edge detection** per pin
-- **Open-drain and pull-up/pull-down** configuration
+Link-time assertions enforce: `_start` at 0x20000000, 4-byte alignment of `trap_vector`, 16-byte alignment of both stack tops, and the image fitting within SRAM.
 
 ---
 
-## Boot Sequence
+## 5. Peripherals
 
-### Two-Stage Bootloader
+| Peripheral | Base | IRQ | Notes |
+|---|---|---|---|
+| UART1 (console) | 0x4806A000 | 72 | NS16550-compatible, 115200 8N1 |
+| UART2 | 0x4806C000 | 73 | |
+| GPIO1 | 0x48310000 | — | See 5.1 |
+| INTC | 0x48200000 | — | OMAP3 interrupt controller |
+| GPTIMER1 | 0x48318000 | 37 | |
+| McSPI1 | 0x48098000 | — | |
+| I2C1 | 0x48070000 | — | |
+| HSMMC1 | 0x4809C000 | — | |
+| EMAC / MDIO | 0x5C040000 / 0x5C030000 | — | |
+| CM / PRM / CONTROL | 0x48004000 / 0x48306000 / 0x48002000 | — | Clock, power and pad control |
 
-```
-┌─────────────────────────────────────────────┐
-│ BootROM (on-chip, read-only)               │
-│ Checks SYS_BOOT pins, loads Stage1         │
-└─────────────────┬───────────────────────────┘
-                  ↓
-        Stage1 @ 0x40200800 (SRAM)
-        - Clock initialization (DPLL setup)
-        - SDRAM controller init (JEDEC sequence)
-        - UART0 init (115200 baud)
-        - Load Stage2 from NOR/NAND
-                  ↓
-      Stage2 @ 0x80000000 (DRAM)
-      - Kernel entry (_start)
-      - Initialize paging (SATP)
-      - Create first process (init)
-      - Enable interrupts
-      - Jump to init (mret)
-                  ↓
-        Scheduler active
-        Processes running
-```
+### 5.1 GPIO1 Assignments
 
-### Clock Initialization Sequence
-
-1. **Disable all PLLs** (bypass mode, ref clock only)
-2. **Configure DPLL1** (multiply 600×, divide 26×) → 600 MHz core
-3. **Configure DPLL3** (multiply 332×, divide 26×) → 332 MHz DDR
-4. **Configure DPLL4** (multiply 864×, divide 26×) → 864 MHz USB/UART
-5. **Set clock dividers** (L3=÷2, L4=÷2 for 150 MHz, 75 MHz)
-6. **Enable module clocks** (UART, GPIO, GPMC, SDRC)
-
-### SDRAM Initialization
-
-1. **Power up sequence** (tRCD, tRP timing)
-2. **Issue JEDEC reset** (multiple cycles)
-3. **Load mode registers** (CAS=3, Burst=4, Write recovery)
-4. **Wait for calibration** (tREFI refresh timer)
-5. **Verify by reading/writing** (memory test)
+| Pin | Direction | Function |
+|---|---|---|
+| 8 | Out | Status LED |
+| 9 | Out | Ethernet PHY reset, active low |
+| 10, 11, 12 | Out | FPGA nCONFIG |
 
 ---
 
-## Kernel Architecture
+## 6. Boot Sequence
 
-### Exception Handling (16 types)
+### 6.1 ARM Cortex-A8
 
-| Code | Exception | Handler | Action |
-|------|-----------|---------|--------|
-| 0 | Instr misaligned | trap → -EACCES | Kill process |
-| 1 | Instr access fault | trap → -EFAULT | Kill process |
-| 2 | Illegal instruction | trap → -EILL | Kill process |
-| 3 | Breakpoint | trap → debugger | Log/halt |
-| 4 | Load misaligned | trap → -EACCES | Kill process |
-| 5 | Load access fault | trap → -EFAULT | Kill process |
-| 6 | Store misaligned | trap → -EACCES | Kill process |
-| 7 | Store access fault | trap → -EFAULT | Kill process |
-| 8 | ECALL from U-mode | syscall_dispatch() | Route to handler |
-| 12 | Instr page fault | do_page_fault() | Demand page or kill |
-| 13 | Load page fault | do_page_fault() | Demand page or kill |
-| 15 | Store page fault | do_page_fault() | Demand page or kill |
+1. The boot ROM samples SYS_BOOT and loads stage 1 into internal SRAM.
+2. Stage 1 (`firmware/boot/stage1.c`, `start.S`) configures the DPLLs, initialises the SDRC and UART, and loads stage 2 from NOR or NAND flash into DRAM at 0x30000000.
+3. Stage 2 (`firmware/boot/stage2.c`) initialises board peripherals and provides a serial shell (`firmware/boot/shell.c`).
 
-### Interrupt Handling (3 types)
+### 6.2 RV32I Core
 
-| mcause | Type | Source | Handler |
-|--------|------|--------|---------|
-| 0x80000003 | Software IRQ | IPI (future SMP) | Dispatch to hart |
-| 0x80000007 | Timer IRQ | CLINT MTIMECMP | reschedule() |
-| 0x8000000B | External IRQ | PLIC | plic_claim() → dispatch |
-
-### Trap Frame Layout (264 bytes)
-
-```
-struct TrapFrame {
-    // RISC-V GPRs x0-x31 (128 bytes)
-    x0, x1, x2, x3, x4, x5, x6, x7,
-    x8, x9, x10, x11, x12, x13, x14, x15,
-    x16, x17, x18, x19, x20, x21, x22, x23,
-    x24, x25, x26, x27, x28, x29, x30, x31,
-    
-    // Exception context (8 bytes)
-    pc,           // mepc (machine exception program counter)
-    status,       // mstatus (machine status register)
-    
-    // Kernel control (4 bytes)
-    kernel_sp,    // Kernel stack pointer for restore
-};
-```
-
-### Context Switch Flow
-
-```
-1. Exception/interrupt occurs
-   ↓
-2. Trap handler (assembly):
-   - Create TrapFrame on kernel stack
-   - Save all x0-x31 registers
-   - Save pc (mepc), status (mstatus)
-   ↓
-3. Call exception_handler(cause, tf):
-   - Dispatch based on mcause
-   - Handle syscall, IRQ, or fault
-   - May call reschedule() if needed
-   ↓
-4. If reschedule required:
-   - Save current process kernel_sp
-   - Load next process kernel_sp
-   - Restore TrapFrame from new stack
-   ↓
-5. MRET (return from machine mode):
-   - Restore user mode (mstatus.MPP = 1)
-   - Jump to mepc (exception return address)
-   - Resume user process
-```
+1. The core comes out of reset at PC 0x20000000 (`_start`).
+2. `start.S` clears `mstatus` and `mie`, loads `mtvec`, `gp` and `sp`, points `mscratch` at the trap stack, zeroes `.bss`, and calls `kernelMain`.
+3. `kernelMain` (`zig/kernel/main.zig`) runs early board setup, initialises the console, the page allocator, trap handlers, the process table and a 10 ms CLINT tick, enables machine timer and external interrupts, and starts the kernel shell.
 
 ---
 
-## Memory Management (zig/kernel/memory.zig)
+## 7. RV32I Kernel
 
-### SV32 Paging (RV32I + S extension)
+### 7.1 ISA and Privilege
 
-**Virtual Address → Physical Address Translation:**
+| Item | Value |
+|---|---|
+| ISA | RV32I + Zicsr + Zifencei |
+| ABI | ilp32, soft float |
+| Privilege | Machine mode only |
+| Code model | medany |
+| Integer multiply and divide | Software (compiler-rt) |
 
-```
-VA[31:0] = [VPN[1]:10 bits | VPN[0]:10 bits | Offset:12 bits]
+### 7.2 Trap Frame
 
-1. Read L1 page table address from SATP.PPN
-2. L1[VPN[1]] → PTE:
-   - If PTE.V = 0: page fault
-   - If PTE.U = 1: continue (user page)
-   - Fetch L2 table address from PTE.PPN
-3. L2[VPN[0]] → PTE:
-   - If PTE.V = 0: page fault
-   - Check permissions (R/W/X, U)
-   - Physical page: PTE.PPN[19:0]
-4. Combine: PA = [PTE.PPN | Offset]
-```
+Trap frames hold one XLEN-wide slot per entry. On RV32 a frame is 33 × 4 = 132 bytes, padded to 144 bytes for 16-byte stack alignment. Compile-time assertions in `trap.zig` keep `start.S` and `TrapFrame` in step.
 
-### Page Table Entry (PTE) Format
+| Slot | Offset (RV32) | Contents |
+|---|---|---|
+| 0 | 0x00 | `sp` (x2) at the point of the trap; restored last |
+| 1 | 0x04 | `ra` (x1) |
+| 2–4 | 0x08–0x10 | `t0`–`t2` |
+| 5–12 | 0x14–0x30 | `a0`–`a7` |
+| 13–24 | 0x34–0x60 | `s0`–`s11` |
+| 25–28 | 0x64–0x70 | `t3`–`t6` |
+| 29 | 0x74 | `mepc` |
+| 30 | 0x78 | `mstatus` |
+| 31 | 0x7C | `mcause` |
+| 32 | 0x80 | `mtval` |
+| — | 0x84–0x8F | Padding |
 
-```
-[31:20] | [19:10] | [9]  | [8]  | [7]  | [6]  | [5]  | [4]  | [3]  | [2:0]
-PPN[11] | PPN[9:0]| D    | A    | G    | U    | X    | W    | R    | V
- (12)   |  (10)   |(dirty|access|global|user|exec|write|read|valid)
-```
+On trap entry `sp` is swapped with `mscratch`, which holds the trap-stack top for the current context. `trapDispatch` returns the frame to resume, which may belong to a different process. On exit, `mscratch` is set to the top of the resumed frame and `sp` is reloaded from slot 0.
 
-### Buddy Allocator
+### 7.3 Exceptions and Interrupts
 
-- **O(1) allocation:** Find first free 2^order block
-- **Merge on free:** Combine adjacent blocks back into larger orders
-- **Tracking:** Per-order hints for fast lookup
-- **64 KB minimum:** Prevents fragmentation below page size
+| `mcause` | Event | Handling |
+|---|---|---|
+| 0, 4, 6 | Misaligned instruction, load or store | Report; advance `mepc` |
+| 1, 5, 7 | Access fault | Report; terminate current process |
+| 2 | Illegal instruction | Report; advance `mepc` |
+| 3 | Breakpoint | Report; advance `mepc` |
+| 8, 11 | `ecall` from U or M mode | System call dispatch |
+| 12, 13, 15 | Page fault | Report; terminate current process |
+| Interrupt 3 | Machine software | Clear MSIP |
+| Interrupt 7 | Machine timer | Advance `mtimecmp`; request reschedule |
+| Interrupt 11 | Machine external | PLIC claim, dispatch, complete |
 
-### Address Space per Process
+On RV32, `mtimecmp` is written as low = 0xFFFFFFFF, then high, then low, as the RISC-V privileged specification requires, so the write cannot raise a spurious interrupt.
 
-```zig
-pub struct AddressSpace {
-    l1_table: [*]u32,      // L1 page table (1024 PTEs)
-    satp: u32,             // SATP register (mode 1, PPN)
-    
-    regions: {
-        text_va, text_size,
-        data_va, data_size,
-        bss_va, bss_size,
-        heap_va, heap_end,
-        stack_va, stack_size,
-    }
-}
-```
+### 7.4 Memory Management
 
----
+| Item | Value |
+|---|---|
+| Physical allocator | Bitmap, 4 KB pages, over DRAM 0x30000000–0x34000000 |
+| Translation | Sv32, two-level, 4 KB pages and 4 MB megapages |
+| `satp` | MODE[31] = 1, ASID = 0, PPN[21:0] = root table |
+| Per-process address space | Kernel SRAM, CLINT, PLIC, L4 peripherals and DRAM identity-mapped, global |
 
-## Process Management (zig/kernel/process.zig)
+### 7.5 Processes
 
-### Process States
+| Item | Value |
+|---|---|
+| Process table | 16 entries |
+| Kernel stack | 8 KB per process |
+| User stack | 16 KB per process |
+| Scheduling | Round-robin, 10-tick quantum, 10 ms tick |
+| States | unused, runnable, running, sleeping, zombie |
+| File descriptors | 16 per process; 0–2 bound to UART |
 
-```
-UNUSED (0)
-  ↓
-RUNNABLE (1) ← Ready queue
-  ↓
-RUNNING (2) ← Scheduler picks
-  ↓ (I/O block) or (timer tick)
-SLEEPING (3)  or → Back to RUNNABLE
-  ↓ (I/O ready)
-RUNNABLE (1)
-  ↓ (exit())
-ZOMBIE (4) → Parent reap()
-  ↓
-FREE (PCB slot recycled)
-```
+### 7.6 System Calls
 
-### Process Control Block (PCB)
+Number in `a7`, arguments in `a0`–`a2`, result in `a0`.
 
-```zig
-pub struct Process {
-    pid: u16,                    // Process ID
-    state: ProcessState,         // RUNNABLE, RUNNING, SLEEPING, ZOMBIE
-    address_space: *AddressSpace,// Page tables
-    kernel_stack: [8*1024]u8,    // Kernel stack (8 KB)
-    trap_frame: *TrapFrame,      // Saved registers
-    priority: u8,                // 0-31 (lower = higher priority)
-    time_slice: u32,             // Ticks remaining (10 ms)
-    open_files: [32]?Fd,         // File descriptors
-    ppid: u16,                   // Parent PID
-    exit_code: i32,              // Exit status
-}
-```
+| No. | Name | Arguments |
+|---|---|---|
+| 0 | `read` | fd, buf, len |
+| 1 | `write` | fd, buf, len |
+| 2 | `open` | path, flags |
+| 3 | `close` | fd |
+| 4 | `yield` | — |
+| 5 | `getpid` | — |
+| 6 | `exit` | code |
+| 7 | `mmap` | addr (ignored), len, prot |
+| 8 | `munmap` | addr, len |
 
-### Fork Implementation
+Device paths: `/dev/uart0`, `/dev/null`, `/dev/zero`.
 
-```zig
-pub fn sys_fork(parent: *Process) u32 {
-    // Allocate child PCB
-    var child = new_process();
-    child.ppid = parent.pid;
-    
-    // Clone address space (copy page tables)
-    child.address_space = clone_address_space(parent.address_space);
-    
-    // Clone registers (return value = 0 for child)
-    memcpy(child.trap_frame, parent.trap_frame, sizeof(TrapFrame));
-    child.trap_frame.x10 = 0;  // a0 = 0 for child
-    
-    // Clone file descriptors
-    for (0..32) child.open_files[i] = parent.open_files[i];
-    
-    // Add to ready queue
-    scheduler.enqueue(child);
-    
-    // Parent sees child PID in a0
-    return child.pid;
-}
-```
+### 7.7 Kernel Shell Commands
 
-### Scheduler (zig/kernel/scheduler.zig)
-
-```zig
-pub fn reschedule() void {
-    // 1. Increment tick counter
-    ticks += 1;
-    
-    // 2. Check if current time slice expired
-    var current = &processes[current_pid];
-    current.time_slice -= 1;
-    
-    if (current.time_slice == 0) {
-        current.state = RUNNABLE;
-        current.time_slice = TICKS_PER_SLICE;  // 60,000 (10 ms)
-        
-        // 3. Find next runnable process
-        var next_pid = find_next_runnable(current_pid + 1);
-        
-        // 4. Context switch
-        processes[next_pid].state = RUNNING;
-        switch_to_process(next_pid);
-    }
-}
-```
+`md`, `mw`, `mwb`, `go`, `reset`, `regs`, `proc`, `spawn`, `kill`, `reap`, `vm`, `vmmap`, `vmtrans`, `tick`, `pages`, `led`, `echo`, `help`.
 
 ---
 
-## System Calls (9 implemented)
+## 8. Build
 
-### Syscall ABI (RISC-V)
+### 8.1 RV32I Kernel
 
-- **a0-a6:** Arguments (a7 = syscall number)
-- **Return:** a0 = result, negative = -errno
-
-### open(path, flags, mode) → fd
+Requires Zig 0.13 or 0.14.
 
 ```
-Returns: file descriptor (0-31) or -ENOENT
+cd zig
+zig build
 ```
 
-### read(fd, buf, count) → bytes_read
+| Output | Description |
+|---|---|
+| `zig-out/bin/phaser-ags-kernel` | ELF, linked at 0x20000000 |
+| `zig-out/bin/phaser-ags-kernel.bin` | Raw image for loading at 0x20000000 |
+
+To override the CPU, for example to enable the M extension:
 
 ```
-Returns: bytes read (0 on EOF) or -EBADF
+zig build -Dcpu=generic_rv32+m+zicsr+zifencei
 ```
 
-### write(fd, buf, count) → bytes_written
+`zig build run` starts `qemu-system-riscv32 -machine virt`. The QEMU `virt` memory map differs from this board: RAM is at 0x80000000 and the UART at 0x10000000. The target is therefore suitable for debugging with `-s -S` and GDB, but produces no console output.
+
+### 8.2 ARM Firmware
+
+Requires `arm-none-eabi-gcc`.
 
 ```
-Returns: bytes written or -EBADF
+cd build
+make
 ```
 
-### mmap(addr, len, prot, flags, fd, offset) → address
+Outputs `stage1` and `stage2` as `.elf`, `.bin`, `.hex` and `.sym` in `build/output/`.
+
+### 8.3 RV32I Core
+
+Requires sbt.
 
 ```
-Returns: mapped address or -ENOMEM
-Supports: MAP_PRIVATE, MAP_FIXED, PROT_READ, PROT_WRITE, PROT_EXEC
+cd chisel
+sbt run
 ```
 
-### munmap(addr, len) → status
-
-```
-Returns: 0 on success or -EINVAL
-Frees pages back to allocator
-```
-
-### fork() → pid
-
-```
-Returns: child PID (parent) or 0 (child)
-```
-
-### exec(path, argv, envp) → never returns
-
-```
-Replaces process image, jumps to entry point
-Returns: -ENOENT on error only
-```
-
-### exit(code) → never returns
-
-```
-Terminates process, sets exit_code for parent
-```
-
-### getpid() → pid
-
-```
-Returns: current process PID
-```
+Runs `EmitVerilog` to generate Verilog for the RV32I core and logic library. `sbt test` runs the NAND primitive tests.
 
 ---
 
-## Device Drivers
+## 9. Known Limitations and Source Discrepancies
 
-### UART0 (NS16550A @ 0x4806A000, IRQ 72)
-
-**Baud Rate:** 115200 (divisor = 26 @ 48 MHz clock)
-
-**Init:**
-- Disable interrupts (IER = 0)
-- Set baudrate divisor (26)
-- Set line control (8N1)
-- Enable FIFO
-- Enable RX interrupt (IER.RDI = 1)
-
-**I/O:**
-- Write: `uart0_putchar(c)` → wait for THR empty, write
-- Read: `uart0_getchar()` → wait for data ready, read
-- Interrupt: RX IRQ → read FIFO, push to shell input buffer
-
-### GPIO (6 banks, 96 pins)
-
-**Configuration:**
-- OE register = 0 (output), 1 (input)
-- DATAOUT register: set pins high/low
-- DATAIN register: read pin state
-
-**Interrupt:**
-- LEVELDETECT0/1: Low/high level trigger
-- RISINGDETECT/FALLINGDETECT: Edge trigger
-- IRQSTATUS: Status + write-1-to-clear
-
-### CLINT Timer (@ 0x02000000)
-
-**Registers:**
-- MTIME (0x4000): 64-bit monotonic timer
-- MTIMECMP (0xBFF8): Compare register
-- Interrupt fires when MTIME ≥ MTIMECMP
-
-**Tick Generation (10 ms @ 6 MHz):**
-1. Set MTIMECMP = MTIME + 60,000
-2. Enable MTIE in mie
-3. On interrupt: reschedule(), set next MTIMECMP
-
-### PLIC (@ 0x0C000000)
-
-**Priority (0x0000-0x0FFC):**
-- Set IRQ priority (1-7)
-
-**Enable (0x2000 + hart*0x80):**
-- Bitmap of enabled IRQs per hart
-
-**Claim (0x200000 + hart*0x1000):**
-- Read to get IRQ number, read-clears pending
-
-**Complete (0x200000 + hart*0x1000):**
-- Write IRQ number to mark complete
-
-**Flow:**
-1. PLIC.claim() → get irq_num
-2. Dispatch irq_num to handler
-3. Handler does work
-4. PLIC.complete(irq_num) → re-enable in PLIC
+| Item | Detail |
+|---|---|
+| RV32I core CSR support | `Rv32iCore.scala` does not implement CSRs, `ecall` or `mret`. The kernel requires them. |
+| Kernel shell preemption | When no process is current, a timer-driven switch to a process does not save the shell context. |
+| SDRAM capacity | MT48H32M16LF is 512 Mbit (64 MB). `bom/complete-bom.json` lists 256 MB, and `device-tree.dts` declares a 256 MB memory node. |
+| UART1 IRQ | OMAP3530 UART1 is IRQ 72. `device-tree.dts` lists 74. |
+| UART functional clock | The driver assumes 48 MHz. `clock/clock-tree.json` lists 26 MHz. |
+| CPU clock | 26 MHz × 23 = 598 MHz. `device-tree.dts` declares 600 MHz. |
+| ARM linker scripts | `firmware/linker/boot.ld` and `sections.ld` both define `SECTIONS` for the same output sections. |
+| Source encoding | Files under `nim/regs/` contain non-UTF-8 bytes. |
 
 ---
 
-## Building & Deployment
-
-### Prerequisites
-
-```bash
-# RISC-V toolchain
-$ sudo apt install gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
-
-# Zig compiler (0.14.0+)
-$ wget https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz
-$ tar -xf zig-linux-x86_64-0.14.0.tar.xz && export PATH=$PWD/zig-0.14.0:$PATH
-
-# Build tools
-$ sudo apt install make gdb
-```
-
-### Compilation
-
-```bash
-# Build kernel
-$ cd zig && zig build
-
-# Output files
-$ ls build/
-  phaser.elf          # Executable (symbols, relocs)
-  phaser.bin          # Binary image (0x80000000)
-  phaser.map          # Linker map
-  phaser.sym          # Symbol table (nm)
-```
-
-### Running
-
-**QEMU RISC-V (virt):**
-```bash
-$ qemu-system-riscv32 -machine virt -kernel build/phaser.elf -serial stdio
-```
-
-**Hardware (OMAP3530):**
-```bash
-# Via JTAG
-$ openocd -f board.cfg
-# In another terminal:
-$ telnet localhost 4444
-> program build/phaser.bin 0x80000000 verify reset
-
-# Serial console
-$ picocom /dev/ttyUSB0 -b 115200
-```
-
----
-
-## Performance
-
-### Measured (6 MHz RISC-V core)
-
-| Operation | Time | Cycles |
-|-----------|------|--------|
-| Context switch | 75 ns | ~450 |
-| Page allocate | 20 cycles | Bitmap lookup |
-| Page table walk | 12 cycles | L1 + L2 fetch |
-| Syscall (exit) | 200 ns | ~1,200 |
-| Timer interrupt | 30 µs | ~180,000 (PLIC + scheduler) |
-
-### Memory Usage
-
-| Component | Size |
-|-----------|------|
-| Kernel text | 48 KB |
-| Kernel data + BSS | 28 KB |
-| Per-process overhead | 256 KB (8 KB kernel stack + 64 KB user stack + page tables) |
-| Total kernel | 120 KB |
-
----
-
-## Known Limitations
-
-- **Single-core only** (no SMP)
-- **No swap** (all pages allocated upfront)
-- **No dynamic linking** (static ELF only)
-- **No signals** (only forceful kill)
-- **Byte-at-a-time UART** (no DMA)
-- **Max 4096 processes** (PCB table size)
-- **No MMU security** (no domain control)
-
----
-
-## Contributing
-
-Submit issues and PRs to: https://github.com/SNAPKITTYWEST/phaser-ags
-
----
-
-**Phaser AGS: Real embedded OS. No compromise on implementation.**
+Copyright 2025 Ahmad Ali Parr / SnapKitty. Licensed under the GNU Affero General Public License v3.0 or later. See `LICENSE`.

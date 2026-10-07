@@ -1,5 +1,5 @@
 //! SPDX-License-Identifier: AGPL-3.0-or-later
-//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty — https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — Zig kernel driver layer (complete, no stubs)
 //!
@@ -76,32 +76,40 @@ pub inline fn regMask(comptime T: type, addr: u32, mask: T, val: T) void {
 }
 
 // ─── CSR read/write ──────────────────────────────────────────────
+//
+//  CSR numbers are 12-bit unsigned (0x000–0xFFF). They are spliced into
+//  the instruction text at comptime: the "I" asm constraint is a *signed*
+//  12-bit immediate (-2048..2047) and rejects CSRs >= 0x800 such as
+//  mcycle (0xB00) and minstret (0xB02). Values are XLEN-wide (usize).
 
-pub inline fn csrRead(csr: u32) u32 {
-    return asm volatile ("csrr %[out], %[csr]"
-        : [out] "=r" (-> u32),
-        : [csr] "I" (csr),
+inline fn csrName(comptime csr: u12) []const u8 {
+    return std.fmt.comptimePrint("{d}", .{csr});
+}
+
+pub inline fn csrRead(comptime csr: u12) usize {
+    return asm volatile ("csrr %[out], " ++ csrName(csr)
+        : [out] "=r" (-> usize),
     );
 }
 
-pub inline fn csrWrite(csr: u32, val: u32) void {
-    asm volatile ("csrw %[csr], %[val]"
+pub inline fn csrWrite(comptime csr: u12, val: usize) void {
+    asm volatile ("csrw " ++ csrName(csr) ++ ", %[val]"
         :
-        : [csr] "I" (csr), [val] "r" (val),
+        : [val] "r" (val),
     );
 }
 
-pub inline fn csrSet(csr: u32, mask: u32) void {
-    asm volatile ("csrs %[csr], %[mask]"
+pub inline fn csrSet(comptime csr: u12, mask: usize) void {
+    asm volatile ("csrs " ++ csrName(csr) ++ ", %[mask]"
         :
-        : [csr] "I" (csr), [mask] "r" (mask),
+        : [mask] "r" (mask),
     );
 }
 
-pub inline fn csrClr(csr: u32, mask: u32) void {
-    asm volatile ("csrc %[csr], %[mask]"
+pub inline fn csrClr(comptime csr: u12, mask: usize) void {
+    asm volatile ("csrc " ++ csrName(csr) ++ ", %[mask]"
         :
-        : [csr] "I" (csr), [mask] "r" (mask),
+        : [mask] "r" (mask),
     );
 }
 

@@ -1,5 +1,5 @@
 //! SPDX-License-Identifier: AGPL-3.0-or-later
-//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty — https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — Physical page allocator + SV32 virtual memory
 //!  (complete, no stubs)
@@ -50,8 +50,9 @@ const PageAlloc = struct {
 var palloc: PageAlloc = undefined;
 
 pub fn init() void {
-    const base = @intFromPtr(&__pages_start);
-    const end = @intFromPtr(&__pages_end);
+    // SV32: physical addresses handled here are 32-bit.
+    const base: u32 = @intCast(@intFromPtr(&__pages_start));
+    const end: u32 = @intCast(@intFromPtr(&__pages_end));
     const total = (end - base) / PAGE_SIZE;
     const bitmap_words = (total + 31) / 32;
 
@@ -173,9 +174,10 @@ pub fn freePageCount() u32 {
 }
 
 fn zeroPage(addr: u32) void {
-    const ptr: [*]u64 = @ptrFromInt(addr);
+    // XLEN-wide stores: sw on RV32 (no 64-bit store instruction).
+    const ptr: [*]usize = @ptrFromInt(addr);
     var i: u32 = 0;
-    while (i < PAGE_SIZE / 8) : (i += 1) {
+    while (i < PAGE_SIZE / @sizeOf(usize)) : (i += 1) {
         ptr[i] = 0;
     }
 }
@@ -204,7 +206,7 @@ pub fn freePageTable(pt: *PageTable) void {
             freePage(l2_paddr);
         }
     }
-    freePage(@intFromPtr(pt));
+    freePage(@intCast(@intFromPtr(pt)));
 }
 
 inline fn isLeafPte(pte: u32) bool {
@@ -222,17 +224,18 @@ inline fn makePte(ppn: u32, flags: u32) u32 {
 // ─── Map a 4KB page ──────────────────────────────────────────────
 
 pub fn mapPage(root: *PageTable, vaddr: u32, paddr: u32, flags: u32) bool {
-    const vpn1: u12 = @intCast((vaddr >> 22) & 0x3FF);
+    const vpn1: u10 = @intCast((vaddr >> 22) & 0x3FF);
     const vpn0: u10 = @intCast((vaddr >> 12) & 0x3FF);
 
-    var l1_pte = root[vpn1];
+    const l1_pte = root[vpn1];
 
     if (isLeafPte(l1_pte)) return false;  // megapage conflict
 
     var l2: *PageTable = undefined;
     if ((l1_pte & PTE_V) == 0) {
         l2 = allocPageTable() orelse return false;
-        root[vpn1] = makePte(@intFromPtr(l2) >> PAGE_SHIFT, PTE_V);
+        const l2_paddr: u32 = @intCast(@intFromPtr(l2));
+        root[vpn1] = makePte(l2_paddr >> PAGE_SHIFT, PTE_V);
     } else {
         l2 = @ptrFromInt(ptePpn(l1_pte) << PAGE_SHIFT);
     }
@@ -246,7 +249,7 @@ pub fn mapPage(root: *PageTable, vaddr: u32, paddr: u32, flags: u32) bool {
 // ─── Map a 4MB megapage ──────────────────────────────────────────
 
 pub fn mapMegaPage(root: *PageTable, vaddr: u32, paddr: u32, flags: u32) bool {
-    const vpn1: u12 = @intCast((vaddr >> 22) & 0x3FF);
+    const vpn1: u10 = @intCast((vaddr >> 22) & 0x3FF);
     if ((vaddr & 0x3FFFFF) != 0 or (paddr & 0x3FFFFF) != 0) return false;
     root[vpn1] = makePte(paddr >> PAGE_SHIFT, flags | PTE_A | PTE_D);
     flushTlbPage(vaddr);
@@ -256,7 +259,7 @@ pub fn mapMegaPage(root: *PageTable, vaddr: u32, paddr: u32, flags: u32) bool {
 // ─── Unmap a 4KB page ────────────────────────────────────────────
 
 pub fn unmapPage(root: *PageTable, vaddr: u32) ?u32 {
-    const vpn1: u12 = @intCast((vaddr >> 22) & 0x3FF);
+    const vpn1: u10 = @intCast((vaddr >> 22) & 0x3FF);
     const vpn0: u10 = @intCast((vaddr >> 12) & 0x3FF);
 
     const l1_pte = root[vpn1];
@@ -275,7 +278,7 @@ pub fn unmapPage(root: *PageTable, vaddr: u32) ?u32 {
 // ─── Unmap a 4MB megapage ────────────────────────────────────────
 
 pub fn unmapMegaPage(root: *PageTable, vaddr: u32) ?u32 {
-    const vpn1: u12 = @intCast((vaddr >> 22) & 0x3FF);
+    const vpn1: u10 = @intCast((vaddr >> 22) & 0x3FF);
     const l1_pte = root[vpn1];
     if ((l1_pte & PTE_V) == 0) return null;
     if (!isLeafPte(l1_pte)) return null;
@@ -288,7 +291,7 @@ pub fn unmapMegaPage(root: *PageTable, vaddr: u32) ?u32 {
 // ─── Translate virtual → physical ────────────────────────────────
 
 pub fn translate(root: *PageTable, vaddr: u32) ?u32 {
-    const vpn1: u12 = @intCast((vaddr >> 22) & 0x3FF);
+    const vpn1: u10 = @intCast((vaddr >> 22) & 0x3FF);
     const vpn0: u10 = @intCast((vaddr >> 12) & 0x3FF);
     const offset = vaddr & PAGE_MASK;
 
@@ -383,7 +386,7 @@ pub fn destroyAddressSpace(root: *PageTable) void {
         }
         root[@intCast(vpn1)] = 0;
     }
-    freePage(@intFromPtr(root));
+    freePage(@intCast(@intFromPtr(root)));
 }
 
 // ─── TLB management ──────────────────────────────────────────────
@@ -409,7 +412,9 @@ pub fn flushTlbAsid(asid: u32) void {
 // ─── Switch to a page table ──────────────────────────────────────
 
 pub fn switchToPageTable(root: *PageTable) void {
-    const satp: u32 = (1 << 31) | (@intFromPtr(root) >> PAGE_SHIFT);
+    // satp (RV32): MODE[31]=1 (Sv32) | ASID[30:22]=0 | PPN[21:0]
+    const root_paddr: u32 = @intCast(@intFromPtr(root));
+    const satp: u32 = (1 << 31) | (root_paddr >> PAGE_SHIFT);
     asm volatile ("sfence.vma zero, zero");
     asm volatile ("csrw satp, %[val]" :: [val] "r" (satp));
     asm volatile ("sfence.vma zero, zero");
