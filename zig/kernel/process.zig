@@ -1,5 +1,5 @@
 //! SPDX-License-Identifier: AGPL-3.0-or-later
-//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty — https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — Process management (complete, no stubs)
 //!
@@ -16,8 +16,9 @@ const trap = @import("trap.zig");
 const memory = @import("memory.zig");
 
 const MAX_PROCS: usize = 16;
-const KSTACK_PAGES: usize = 2;    // 8 KB kernel stack
-const USTACK_PAGES: usize = 4;    // 16 KB user stack
+// Page counts are u32 to match memory.allocRange/freeRange (SV32 PAs).
+const KSTACK_PAGES: u32 = 2;    // 8 KB kernel stack
+const USTACK_PAGES: u32 = 4;    // 16 KB user stack
 
 // ─── Process states ──────────────────────────────────────────────
 
@@ -34,8 +35,9 @@ const ProcState = enum(u8) {
 pub const Process = struct {
     pid:        u16,
     state:      ProcState,
-    ksp:        u64,              // Saved kernel stack pointer (trap frame on it)
+    ksp:        usize,            // Saved trap frame pointer (XLEN-wide)
     kstack:     u32,             // Kernel stack base address
+    ustack:     u32,             // User stack base address (0 = none)
     page_root:  *memory.PageTable,
     entry:      u32,
     quantum:    u32,             // Ticks remaining in time slice
@@ -81,6 +83,7 @@ pub fn init() void {
             .state = .unused,
             .ksp = 0,
             .kstack = 0,
+            .ustack = 0,
             .page_root = undefined,
             .entry = 0,
             .quantum = 0,
@@ -149,6 +152,7 @@ pub fn create(entry: u32, name: []const u8) ?*Process {
     };
     tf.s0 = 0;                         // frame pointer
     tf.sp = ustack + USTACK_PAGES * memory.PAGE_SIZE;  // stack grows down
+    proc.ustack = ustack;
 
     // Create address space
     const root = memory.createAddressSpace() orelse {
@@ -189,11 +193,6 @@ pub fn create(entry: u32, name: []const u8) ?*Process {
     proc.name[len] = 0;
 
     // Set up default file descriptors: stdin=0, stdout=1, stderr=2
-    const uart_dev = DevOps{
-        .read = uartDevRead,
-        .write = uartDevWrite,
-        .close = uartDevClose,
-    };
     // We store the dev ops pointer — it's a global, safe to point to
     proc.fds[0] = FdEntry{ .kind = .device, .dev = &uart_read_ops, .offset = 0, .flags = 0 };
     proc.fds[1] = FdEntry{ .kind = .device, .dev = &uart_write_ops, .offset = 0, .flags = 0 };
@@ -324,19 +323,12 @@ pub fn kill(pid: u16) void {
         }
     }
 
-    // Free user stack
-    const ustack_base = p.kstack + KSTACK_PAGES * memory.PAGE_SIZE - @sizeOf(trap.TrapFrame);
-    // The user stack is tracked in the trap frame's sp field
-    // We need to free it — but we need to figure out the ustack base from sp
-    // Since sp = ustack + USTACK_PAGES * PAGE_SIZE, ustack = sp - USTACK_PAGES * PAGE_SIZE
-    // However, the trap frame is on the kernel stack, and we've already set up
-    // the sp in the initial trap frame. We need to recover it.
-    // Read the saved sp from the trap frame
-    const tf: *trap.TrapFrame = @ptrFromInt(@intCast(p.ksp));
-    const saved_sp = tf.sp;
-    if (saved_sp != 0) {
-        const ustack = @intCast(saved_sp) - USTACK_PAGES * memory.PAGE_SIZE;
-        memory.freeRange(ustack, USTACK_PAGES);
+    // Free user stack (base recorded at create time; the live sp in the
+    // latest trap frame can be anywhere inside the stack, so it cannot be
+    // used to recover the base).
+    if (p.ustack != 0) {
+        memory.freeRange(p.ustack, USTACK_PAGES);
+        p.ustack = 0;
     }
 
     // Free kernel stack
@@ -447,7 +439,7 @@ pub fn dumpAll() void {
             driver.Uart.putc(' ');
             driver.Uart.putHex(p.quantum);
             driver.Uart.putc(' ');
-            driver.Uart.putHex(@intCast(p.total_ticks));
+            driver.Uart.putHex(@truncate(p.total_ticks));
             driver.Uart.putc(' ');
             for (p.name) |ch| {
                 if (ch == 0) break;

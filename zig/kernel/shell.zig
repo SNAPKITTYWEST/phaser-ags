@@ -1,5 +1,5 @@
 //! SPDX-License-Identifier: AGPL-3.0-or-later
-//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty — https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — Kernel shell (complete, no stubs)
 //!
@@ -172,7 +172,7 @@ fn cmdRegs() void {
         const val = driver.csrRead(csr[1]);
         driver.Uart.puts(csr[0]);
         driver.Uart.puts(": ");
-        driver.Uart.putHex(val);
+        driver.Uart.putHex(@truncate(val));  // XLEN = 32 on target
         driver.Uart.putc('\n');
     }
 }

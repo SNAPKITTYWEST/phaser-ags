@@ -1,5 +1,5 @@
 //! SPDX-License-Identifier: AGPL-3.0-or-later
-//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty — https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — Trap framework (complete, no stubs)
 //!
@@ -10,51 +10,74 @@
 const std = @import("std");
 const driver = @import("driver.zig");
 
-// ─── Trap frame layout (matches start.S offsets exactly) ─────────
+// ─── Trap frame layout (matches start.S slot map exactly) ────────
+//
+//  One slot per XLEN register (usize = 4 bytes on RV32, 8 on RV64),
+//  33 live slots, padded to a 16-byte multiple (psABI stack alignment):
+//    RV32: 132 → 144 bytes      RV64: 264 → 272 bytes
+
+const FRAME_SLOTS = 33;
+pub const FRAME_SIZE = std.mem.alignForward(usize, FRAME_SLOTS * @sizeOf(usize), 16);
+const PAD_SLOTS = (FRAME_SIZE - FRAME_SLOTS * @sizeOf(usize)) / @sizeOf(usize);
 
 pub const TrapFrame = extern struct {
-    prev_ctx:  u64,      // 0(sp)   — old sp before csrrw swap
-    ra:        u64,      // 8       x1
-    t0:        u64,      // 16      x5
-    t1:        u64,      // 24      x6
-    t2:        u64,      // 32      x7
-    a0:        u64,      // 40      x10
-    a1:        u64,      // 48      x11
-    a2:        u64,      // 56      x12
-    a3:        u64,      // 64      x13
-    a4:        u64,      // 72      x14
-    a5:        u64,      // 80      x15
-    a6:        u64,      // 88      x16
-    a7:        u64,      // 96      x17
-    s0:        u64,      // 104     x8
-    s1:        u64,      // 112     x9
-    s2:        u64,      // 120     x18
-    s3:        u64,      // 128     x19
-    s4:        u64,      // 136     x20
-    s5:        u64,      // 144     x21
-    s6:        u64,      // 152     x22
-    s7:        u64,      // 160     x23
-    s8:        u64,      // 168     x24
-    s9:        u64,      // 176     x25
-    s10:       u64,      // 184     x26
-    s11:       u64,      // 192     x27
-    t3:        u64,      // 200     x28
-    t4:        u64,      // 208     x29
-    t5:        u64,      // 216     x30
-    t6:        u64,      // 224     x31
-    mepc:      u64,      // 232
-    mstatus:   u64,      // 240
-    mcause:    u64,      // 248
-    mtval:     u64,      // 256
+    sp:        usize,    // slot 0   x2 — interrupted sp (restored last)
+    ra:        usize,    // slot 1   x1
+    t0:        usize,    // slot 2   x5
+    t1:        usize,    // slot 3   x6
+    t2:        usize,    // slot 4   x7
+    a0:        usize,    // slot 5   x10
+    a1:        usize,    // slot 6   x11
+    a2:        usize,    // slot 7   x12
+    a3:        usize,    // slot 8   x13
+    a4:        usize,    // slot 9   x14
+    a5:        usize,    // slot 10  x15
+    a6:        usize,    // slot 11  x16
+    a7:        usize,    // slot 12  x17
+    s0:        usize,    // slot 13  x8
+    s1:        usize,    // slot 14  x9
+    s2:        usize,    // slot 15  x18
+    s3:        usize,    // slot 16  x19
+    s4:        usize,    // slot 17  x20
+    s5:        usize,    // slot 18  x21
+    s6:        usize,    // slot 19  x22
+    s7:        usize,    // slot 20  x23
+    s8:        usize,    // slot 21  x24
+    s9:        usize,    // slot 22  x25
+    s10:       usize,    // slot 23  x26
+    s11:       usize,    // slot 24  x27
+    t3:        usize,    // slot 25  x28
+    t4:        usize,    // slot 26  x29
+    t5:        usize,    // slot 27  x30
+    t6:        usize,    // slot 28  x31
+    mepc:      usize,    // slot 29
+    mstatus:   usize,    // slot 30
+    mcause:    usize,    // slot 31
+    mtval:     usize,    // slot 32
+    _pad:      [PAD_SLOTS]usize,
 };
 
 comptime {
-    std.debug.assert(@sizeOf(TrapFrame) == 264);
+    const W = @sizeOf(usize);
+    std.debug.assert(@sizeOf(TrapFrame) == FRAME_SIZE);
+    std.debug.assert(FRAME_SIZE % 16 == 0);
+    std.debug.assert(@offsetOf(TrapFrame, "sp") == 0 * W);
+    std.debug.assert(@offsetOf(TrapFrame, "ra") == 1 * W);
+    std.debug.assert(@offsetOf(TrapFrame, "a0") == 5 * W);
+    std.debug.assert(@offsetOf(TrapFrame, "a7") == 12 * W);
+    std.debug.assert(@offsetOf(TrapFrame, "s0") == 13 * W);
+    std.debug.assert(@offsetOf(TrapFrame, "t6") == 28 * W);
+    std.debug.assert(@offsetOf(TrapFrame, "mepc") == 29 * W);
+    std.debug.assert(@offsetOf(TrapFrame, "mtval") == 32 * W);
 }
+
+/// mcause: interrupt flag is the MSB of XLEN (bit 31 on RV32, 63 on RV64).
+const MCAUSE_IRQ_BIT: std.math.Log2Int(usize) = @bitSizeOf(usize) - 1;
+const MCAUSE_CODE_MASK: usize = std.math.maxInt(usize) >> 1;
 
 // ─── Exception and interrupt codes ───────────────────────────────
 
-pub const Exception = enum(u64) {
+pub const Exception = enum(usize) {
     instr_misaligned   = 0,
     instr_access       = 1,
     illegal_instr      = 2,
@@ -72,7 +95,7 @@ pub const Exception = enum(u64) {
     _,
 };
 
-pub const Interrupt = enum(u64) {
+pub const Interrupt = enum(usize) {
     s_software  = 1,
     m_software  = 3,
     s_timer     = 5,
@@ -84,17 +107,17 @@ pub const Interrupt = enum(u64) {
 
 // ─── Handler registration ────────────────────────────────────────
 
-const ExceptionHandler = *const fn (*TrapFrame, u64) void;
-const InterruptHandler = *const fn (*TrapFrame, u64) void;
+const ExceptionHandler = *const fn (*TrapFrame, usize) void;
+const InterruptHandler = *const fn (*TrapFrame, usize) void;
 
 var exc_handlers: [16]?ExceptionHandler = .{null} ** 16;
 var irq_handlers: [12]?InterruptHandler = .{null} ** 12;
 
-pub fn registerException(code: u64, handler: ExceptionHandler) void {
+pub fn registerException(code: usize, handler: ExceptionHandler) void {
     if (code < 16) exc_handlers[code] = handler;
 }
 
-pub fn registerInterrupt(code: u64, handler: InterruptHandler) void {
+pub fn registerInterrupt(code: usize, handler: InterruptHandler) void {
     if (code > 0 and code < 12) irq_handlers[code] = handler;
 }
 
@@ -110,8 +133,8 @@ pub fn requestReschedule() void {
 
 export fn trapDispatch(frame: *TrapFrame) *TrapFrame {
     const cause = frame.mcause;
-    const is_irq = (cause >> 63) != 0;
-    const code = cause & 0x7FFF_FFFF_FFFF_FFFF;
+    const is_irq = (cause >> MCAUSE_IRQ_BIT) != 0;
+    const code = cause & MCAUSE_CODE_MASK;
 
     if (is_irq) {
         dispatchInterrupt(frame, code);
@@ -130,7 +153,7 @@ export fn trapDispatch(frame: *TrapFrame) *TrapFrame {
 
 // ─── Interrupt dispatch ──────────────────────────────────────────
 
-fn dispatchInterrupt(frame: *TrapFrame, code: u64) void {
+fn dispatchInterrupt(frame: *TrapFrame, code: usize) void {
     if (code < 12 and irq_handlers[code] != null) {
         irq_handlers[code].?(frame, code);
         return;
@@ -150,7 +173,7 @@ fn dispatchInterrupt(frame: *TrapFrame, code: u64) void {
 
 // ─── Exception dispatch ──────────────────────────────────────────
 
-fn dispatchException(frame: *TrapFrame, code: u64) void {
+fn dispatchException(frame: *TrapFrame, code: usize) void {
     if (code < 16 and exc_handlers[code] != null) {
         exc_handlers[code].?(frame, code);
         return;
@@ -214,7 +237,7 @@ fn defaultExternalHandler(frame: *TrapFrame) void {
 // ─── Exception handlers ──────────────────────────────────────────
 
 fn handleEcall(frame: *TrapFrame) void {
-    const syscall_num: u64 = frame.a7;
+    const syscall_num: usize = frame.a7;
     const result = @import("syscall.zig").dispatch(syscall_num, frame);
     frame.a0 = result;
     frame.mepc += 4;  // Skip the ecall instruction
@@ -335,7 +358,8 @@ pub fn initDefaults() void {
     registerInterrupt(@intFromEnum(Interrupt.m_external), handleExternalIrq);
 }
 
-fn handleTimerIrq(frame: *TrapFrame, code: u64) void {
+fn handleTimerIrq(frame: *TrapFrame, code: usize) void {
+    _ = frame;
     _ = code;
     const timer_mod = @import("timer.zig");
     timer_mod.ackTick();
@@ -344,14 +368,14 @@ fn handleTimerIrq(frame: *TrapFrame, code: u64) void {
     requestReschedule();
 }
 
-fn handleSoftwareIrq(frame: *TrapFrame, code: u64) void {
+fn handleSoftwareIrq(frame: *TrapFrame, code: usize) void {
     _ = frame;
     _ = code;
     // Clear MSIP
     driver.regWrite(u32, 0x02000000, 0);
 }
 
-fn handleExternalIrq(frame: *TrapFrame, code: u64) void {
+fn handleExternalIrq(frame: *TrapFrame, code: usize) void {
     _ = frame;
     _ = code;
     const plic = driver.Plic;

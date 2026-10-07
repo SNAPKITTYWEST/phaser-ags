@@ -1,5 +1,5 @@
 //! SPDX-License-Identifier: AGPL-3.0-or-later
-//! Copyright 2025 Ahmad Ali Parr / SnapKitty � https://github.com/SNAPKITTYWEST/phaser-ags
+//! Copyright 2025 Ahmad Ali Parr / SnapKitty — https://github.com/SNAPKITTYWEST/phaser-ags
 //! ═══════════════════════════════════════════════════════════════════
 //!  PHASER AGS — Zig kernel entry point
 //!
@@ -8,8 +8,9 @@
 //!    2. kernelMain: board init → page alloc → VM → timer → shell
 //!    3. Shell: interactive over UART, commands for debug/control
 //!
-//!  Build: zig build-exe main.zig -target riscv64-freestanding-none
-//!         -O ReleaseSmall -linker-script kernel.ld
+//!  Build: cd zig && zig build
+//!         (riscv32-freestanding-none, cpu generic_rv32+zicsr+zifencei,
+//!          linked with kernel/kernel.ld, start.S assembled in)
 //! ═══════════════════════════════════════════════════════════════════
 
 const std = @import("std");
@@ -34,7 +35,7 @@ export fn kernelMain() callconv(.C) void {
     driver.Uart.puts("└────────────────────────────────────┘\n");
 
     // ── Phase 2: Page allocator ──
-    memory.initPageAlloc();
+    memory.init();
 
     // ── Phase 3: Trap framework ──
     trap.initDefaults();
